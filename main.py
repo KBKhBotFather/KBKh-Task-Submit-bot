@@ -81,7 +81,7 @@ def check_member_registration(tg_id):
     return user
 
 # ==========================================
-# 🚪 MULTI-DOOR LOGIN
+# 🚪 MULTI-DOOR LOGIN & CHEAT CODE
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -92,6 +92,20 @@ def send_welcome(message):
     user = check_member_registration(tg_id)
     if user: bot.send_message(message.chat.id, f"Welcome to KBKh Bot Ecosystem, {user['fb_name']}!\nYou are in {user['team_name']}.", reply_markup=member_main_menu())
     else: bot.send_message(message.chat.id, "You are not registered yet❌\nPlease register from the Registration Bot first.", reply_markup=ReplyKeyboardRemove())
+
+@bot.message_handler(commands=['start_task'])
+def trigger_task_now(message):
+    if str(message.from_user.id) != ADMIN_CHAT_ID: return
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        past_time = get_bd_time() - timedelta(minutes=2)
+        cursor.execute("UPDATE active_assignments SET scheduled_for = %s WHERE is_started = FALSE", (past_time,))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, "Cheat Code Activated! 🚀\n\nAny pending assigned task will trigger within the next 60 seconds.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Cheat Code Error: {e}")
 
 @bot.message_handler(func=lambda msg: msg.text in ["QnAKEY22", "PublisherKEY22", "ADMINKEY22"])
 def handle_secret_keys(message):
@@ -174,7 +188,6 @@ def admin_management_buttons(message):
         markup = InlineKeyboardMarkup(row_width=2).add(InlineKeyboardButton("Yes", callback_data="reset_task_yes"), InlineKeyboardButton("No", callback_data="cancel_action"))
         bot.send_message(message.chat.id, "Are you sure you want to reset all Task Data?", reply_markup=markup)
     elif text == "Edit Instructions":
-        # আপনার ইনস্ট্রাকশন অনুযায়ী সরাসরি Task Instruction এডিটে চলে যাবে
         markup = get_task_edit_keyboard(message.from_user.id)
         bot.send_message(message.chat.id, "Edit Task Instructions:", reply_markup=markup)
 
@@ -213,7 +226,7 @@ def handle_general_submissions(message):
         check_and_process_question(message, text, is_photo=False)
     elif active_task == 2 and message.content_type == 'photo':
         caption = message.caption
-        if not caption: return bot.send_message(message.chat.id, "ছবি এর সাথে ক্যাপশন হিসাবে আপনার তৈরি করা প্রশ্নটি যুক্ত করতে হবে। অন্যথায় গ্রহণযোগ্য হবে না।❌")
+        if not caption: return bot.send_message(message.chat.id, "ছবি এর সাথে ক্যাপশন হিসাবে আপনার তৈরি করা প্রশ্নটি যুক্ত করতে হবে। অন্যথায় গ্রহণযোগ্য হবে plain না।❌")
         check_and_process_question(message, caption, is_photo=True, photo_id=message.photo[-1].file_id)
     elif active_task == 3 and message.content_type == 'photo':
         caption = message.caption
@@ -307,7 +320,7 @@ def task_flow_callbacks(call):
         bot.send_message(call.message.chat.id, "Task submitted successfully!\nPlease wait for confirmation.")
 
 # ==========================================
-# 👑 ADMIN: TASK ASSIGN, ORGANIZE, EDIT (BKLn Logic Restored)
+# 👑 ADMIN: TASK ASSIGN, ORGANIZE, EDIT
 # ==========================================
 def render_ta_assign_page(chat_id, message_id, adm_id):
     state = admin_state.get(adm_id, {}).get('assigning', {})
@@ -737,7 +750,98 @@ def simple_cancel(call):
 def coming_soon(message):
     bot.send_message(message.chat.id, "⏳ This feature is Coming Soon!")
 
+# ==========================================
+# ⏰ BACKGROUND AUTO-TIMER (Restored)
+# ==========================================
+def auto_task_timer():
+    while True:
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT * FROM active_assignments")
+            assignments = cursor.fetchall()
+            now = get_bd_time()
+            
+            for assign in assignments:
+                team, t_num, msg_lvl, sched = assign['team_name'], assign['task_num'], assign['current_msg'], assign['scheduled_for']
+                is_st = assign['is_started']
+                
+                if not is_st and now >= sched:
+                    cursor.execute("UPDATE active_assignments SET is_started = TRUE, current_msg = 1 WHERE id = %s", (assign['id'],))
+                    cursor.execute("SELECT msg_1 FROM tasks WHERE task_num = %s", (t_num,))
+                    task_msgs = cursor.fetchone()
+                    if task_msgs and task_msgs['msg_1']:
+                        cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
+                        m_users = cursor.fetchall()
+                        for u in m_users:
+                            try: bot.send_message(u['telegram_id'], task_msgs['msg_1'])
+                            except: pass
+                    continue
+                
+                if not is_st: continue 
+                
+                cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
+                total_members = cursor.fetchone()['count']
+                
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT s.telegram_id) 
+                    FROM submissions s 
+                    JOIN members m ON s.telegram_id = m.telegram_id 
+                    WHERE m.team_name = %s AND s.task_num = %s AND s.status IN ('Approved')
+                """, (team, t_num))
+                done_members = cursor.fetchone()['count']
+                
+                if total_members == 0 or done_members >= total_members:
+                    cursor.execute("DELETE FROM active_assignments WHERE id = %s", (assign['id'],))
+                    continue
+
+                diff_hours = (now - sched).total_seconds() / 3600
+                cursor.execute("SELECT msg_2, msg_3 FROM tasks WHERE task_num = %s", (t_num,))
+                t_msgs = cursor.fetchone()
+                
+                cursor.execute("""
+                    SELECT m.telegram_id FROM members m 
+                    LEFT JOIN user_task_status uts ON m.telegram_id = uts.telegram_id AND uts.task_num = %s
+                    WHERE m.team_name = %s AND m.status = 'Approved' AND (uts.completed IS NULL OR uts.completed = FALSE)
+                """, (t_num, team))
+                pending_users = cursor.fetchall()
+
+                if diff_hours >= 24 and msg_lvl == 1 and t_msgs and t_msgs['msg_2']:
+                    for u in pending_users:
+                        try: bot.send_message(u['telegram_id'], t_msgs['msg_2'])
+                        except: pass
+                    cursor.execute("UPDATE active_assignments SET current_msg = 2 WHERE id = %s", (assign['id'],))
+                    
+                elif diff_hours >= 48 and msg_lvl == 2 and t_msgs and t_msgs['msg_3']:
+                    for u in pending_users:
+                        try: bot.send_message(u['telegram_id'], t_msgs['msg_3'])
+                        except: pass
+                    cursor.execute("UPDATE active_assignments SET current_msg = 3 WHERE id = %s", (assign['id'],))
+                    
+                elif diff_hours >= 72:
+                    cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
+                    m_users = cursor.fetchall()
+                    end_msg = "Task END!\nThank you dear member♥️"
+                    for u in m_users:
+                        try: bot.send_message(u['telegram_id'], end_msg)
+                        except: pass
+                    cursor.execute("DELETE FROM active_assignments WHERE id = %s", (assign['id'],))
+            conn.commit()
+            conn.close()
+        except Exception as e: print("Timer Error:", e)
+        time.sleep(60)
+
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=auto_task_timer, daemon=True).start()
     print("🤖 KBKh Task Bot is running smoothly...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    try:
+        bot.remove_webhook()
+        time.sleep(2)
+    except: pass
+    while True:
+        try:
+            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        except Exception as e:
+            print(e)
+            time.sleep(5)
