@@ -242,7 +242,6 @@ def handle_general_submissions(message):
         if photo_id: bot.send_photo(message.chat.id, photo_id, caption=caption, reply_markup=markup)
         else: bot.send_message(message.chat.id, caption, reply_markup=markup)
 
-# 🟢 FIXED: Check Line By Line for multiple questions
 def check_and_process_question(message, question_text, is_photo=False, photo_id=None):
     tg_id = message.from_user.id
     month_name = get_bd_time().strftime("%B")
@@ -253,17 +252,15 @@ def check_and_process_question(message, question_text, is_photo=False, photo_id=
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         lines = [line.strip() for line in question_text.split('\n') if len(line.strip()) > 4]
-        
         for line in lines:
-            cursor.execute("SELECT question_text, similarity(question_text, %s) as sim FROM kbkh_question_bank WHERE month = %s AND similarity(question_text, %s) > 0.40 ORDER BY sim DESC LIMIT 1", (line, month_name, line))
+            cursor.execute("SELECT question_text, similarity(question_text, %s) as sim FROM kbkh_question_bank WHERE month = %s AND similarity(question_text, %s) > 0.35 ORDER BY sim DESC LIMIT 1", (line, month_name, line))
             res = cursor.fetchone()
             if res:
                 match = res
                 matched_line = line
                 break
-                
         if not match and len(lines) == 0:
-            cursor.execute("SELECT question_text, similarity(question_text, %s) as sim FROM kbkh_question_bank WHERE month = %s AND similarity(question_text, %s) > 0.40 ORDER BY sim DESC LIMIT 1", (question_text, month_name, question_text))
+            cursor.execute("SELECT question_text, similarity(question_text, %s) as sim FROM kbkh_question_bank WHERE month = %s AND similarity(question_text, %s) > 0.35 ORDER BY sim DESC LIMIT 1", (question_text, month_name, question_text))
             res = cursor.fetchone()
             if res:
                 match = res
@@ -511,7 +508,11 @@ def admin_task_actions(call):
             cursor = conn.cursor()
             for i, t_num in enumerate(tasks):
                 if i < len(teams):
+                    # 🟢 Wiping old progress to make it FRESH!
                     cursor.execute("DELETE FROM kbkh_active_assignments WHERE team_name = %s", (teams[i],))
+                    cursor.execute("DELETE FROM kbkh_user_task_status WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
+                    cursor.execute("DELETE FROM kbkh_submissions WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
+                    
                     cursor.execute("INSERT INTO kbkh_active_assignments (team_name, task_num, scheduled_for, is_started, current_msg) VALUES (%s, %s, %s, FALSE, 0)", (teams[i], int(t_num), next_midnight))
             conn.commit()
             admin_state[adm_id]['assigning']['selected'] = None
@@ -610,6 +611,7 @@ def admin_task_actions(call):
             bot.answer_callback_query(call.id, "Task Deleted Successfully!", show_alert=True)
         finally: conn.close()
 
+# Add/Org Task Steps
 def step_add_msg1(message):
     adm_id = message.from_user.id
     if adm_id not in admin_state or 't_num' not in admin_state[adm_id]: return
@@ -694,7 +696,7 @@ def step_update_task_msg(message):
     finally: conn.close()
 
 # ==========================================
-# 👑 ADMIN: TASK REVIEW (FLAT LIST, NO FOLDERS)
+# 👑 ADMIN: TASK REVIEW
 # ==========================================
 def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
     status_filter = 'Approved' if is_completed else 'Pending'
@@ -749,7 +751,6 @@ def admin_grading_actions(call):
         if ADMIN_CHAT_ID not in admin_state: admin_state[ADMIN_CHAT_ID] = {}
         render_admin_submission_list(call.message.chat.id, call.message.message_id, is_completed)
         
-    # 🟢 Viewing Submission & Multiple Photos Logic
     elif call.data.startswith("grd_"):
         sub_id = int(call.data.split("_")[1])
         conn = get_db_connection()
@@ -826,7 +827,7 @@ def process_admin_feedback(message, sub_id):
 
 def finalize_grading(sub_id, status_act, feedback, admin_chat_id):
     if ADMIN_CHAT_ID in admin_state:
-        admin_state[ADMIN_CHAT_ID].pop('feedback', None) # 🟢 Clearing feedback so it doesn't leak!
+        admin_state[ADMIN_CHAT_ID].pop('feedback', None) 
         admin_state[ADMIN_CHAT_ID].pop('action', None)
         
     conn = get_db_connection()
@@ -888,7 +889,6 @@ def auto_task_timer():
                 cursor.execute("SELECT COUNT(DISTINCT telegram_id) FROM kbkh_submissions WHERE team_name = %s AND task_num = %s AND status = 'Approved'", (team, t_num))
                 done_members = cursor.fetchone()['count']
                 
-                # 🟢 Trigger Task End immediately when everyone is done
                 if total_members > 0 and done_members >= total_members:
                     cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
                     for u in cursor.fetchall():
