@@ -198,8 +198,13 @@ def admin_management_buttons(message):
 def handle_general_submissions(message):
     tg_id = message.from_user.id
     if str(tg_id) == ADMIN_CHAT_ID: return
+    
     menu_items = ["Task", "Submit QnA", "Submit Article", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "QnAKEY22", "PublisherKEY22", "ADMINKEY22"]
     if message.content_type == 'text' and message.text in menu_items: return
+    
+    # 🟢 8. STRICT LOCK: Prevent input during "Yes/No/Cancel" phase
+    if tg_id in user_state and user_state[tg_id].get('waiting_btn'):
+        return bot.send_message(message.chat.id, "অনুগ্রহ করে পূর্বের মেসেজ এ \"Yes, No বা Cancel\" চেপে কমান্ড প্রদান করে পরবর্তী ধাপের কাজ করুন।")
     
     user = check_member_registration(tg_id)
     if not user: return
@@ -209,8 +214,7 @@ def handle_general_submissions(message):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT task_num FROM kbkh_active_assignments WHERE team_name = %s AND is_started = TRUE", (user['team_name'],))
         assign = cursor.fetchone()
-        if not assign:
-            return bot.send_message(message.chat.id, "No Task available at this moment!")
+        if not assign: return bot.send_message(message.chat.id, "No Task available at this moment!")
         
         active_task = assign['task_num']
         cursor.execute("SELECT completed FROM kbkh_user_task_status WHERE telegram_id = %s AND task_num = %s", (tg_id, active_task))
@@ -242,6 +246,7 @@ def handle_general_submissions(message):
         if photo_id: bot.send_photo(message.chat.id, photo_id, caption=caption, reply_markup=markup)
         else: bot.send_message(message.chat.id, caption, reply_markup=markup)
 
+# 🟢 4 & 3. FIXED: Line By Line check & 80% Similarity Text
 def check_and_process_question(message, question_text, is_photo=False, photo_id=None):
     tg_id = message.from_user.id
     month_name = get_bd_time().strftime("%B")
@@ -251,6 +256,7 @@ def check_and_process_question(message, question_text, is_photo=False, photo_id=
     
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
+        # Check line by line for multiple inputs
         lines = [line.strip() for line in question_text.split('\n') if len(line.strip()) > 4]
         for line in lines:
             cursor.execute("SELECT question_text, similarity(question_text, %s) as sim FROM kbkh_question_bank WHERE month = %s AND similarity(question_text, %s) > 0.35 ORDER BY sim DESC LIMIT 1", (line, month_name, line))
@@ -269,17 +275,20 @@ def check_and_process_question(message, question_text, is_photo=False, photo_id=
     
     if match:
         user_state[tg_id]['temp_hold'] = {'q': question_text, 'p': photo_id}
-        warn_msg = f"↗️Your Question: {matched_line}\n\n↘️ Previously Submitted Question:\n{match['question_text']}\n\n⚠️দুইটি প্রশ্নের মধ্যে প্রায় ৪০% মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে না। আপনার যদি মনে হয় Ai ভুল করছে তাহলে 'Submit Anyway' Button চেপে সাবমিট করতে পারবেন।"
+        warn_msg = f"↗️Your Question: {matched_line}\n\n↘️ Previously Submitted Question:\n{match['question_text']}\n\n⚠️দুইটি প্রশ্নের মধ্যে প্রায় 80% মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে না। আপনার যদি মনে হয় Ai ভুল করছে তাহলে 'Submit Anyway' Button চেপে সাবমিট করতে পারবেন।"
         markup = InlineKeyboardMarkup().row(InlineKeyboardButton("Submit Anyway", callback_data="force_add_q"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, warn_msg, reply_markup=markup)
     else: add_question_to_state(message.chat.id, tg_id, question_text, photo_id)
 
 def add_question_to_state(chat_id, tg_id, text, photo_id=None):
     user_state[tg_id]['collected'].append({'text': text, 'photo': photo_id})
+    user_state[tg_id]['waiting_btn'] = True # 🟢 Lock activated
+    
     items = user_state[tg_id]['collected']
     for i in items:
         if i['photo']: bot.send_photo(chat_id, i['photo'], caption=i['text'])
         else: bot.send_message(chat_id, i['text'])
+        
     markup = InlineKeyboardMarkup(row_width=3).row(InlineKeyboardButton("Yes", callback_data="add_more_q"), InlineKeyboardButton("No", callback_data="final_submit_task"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
     bot.send_message(chat_id, "Would you like to add any more questions?", reply_markup=markup)
 
@@ -305,6 +314,9 @@ def task_flow_callbacks(call):
     try: bot.answer_callback_query(call.id)
     except: pass
     
+    if tg_id in user_state: user_state[tg_id]['waiting_btn'] = False # 🟢 Lock removed
+    
+    # 🟢 1. FIXED: Instant Vanish on Cancel
     if call.data == "cancel_action":
         user_state.pop(tg_id, None)
         if tg_id in admin_state:
@@ -508,11 +520,9 @@ def admin_task_actions(call):
             cursor = conn.cursor()
             for i, t_num in enumerate(tasks):
                 if i < len(teams):
-                    # 🟢 Wiping old progress to make it FRESH!
                     cursor.execute("DELETE FROM kbkh_active_assignments WHERE team_name = %s", (teams[i],))
                     cursor.execute("DELETE FROM kbkh_user_task_status WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
                     cursor.execute("DELETE FROM kbkh_submissions WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
-                    
                     cursor.execute("INSERT INTO kbkh_active_assignments (team_name, task_num, scheduled_for, is_started, current_msg) VALUES (%s, %s, %s, FALSE, 0)", (teams[i], int(t_num), next_midnight))
             conn.commit()
             admin_state[adm_id]['assigning']['selected'] = None
@@ -611,7 +621,6 @@ def admin_task_actions(call):
             bot.answer_callback_query(call.id, "Task Deleted Successfully!", show_alert=True)
         finally: conn.close()
 
-# Add/Org Task Steps
 def step_add_msg1(message):
     adm_id = message.from_user.id
     if adm_id not in admin_state or 't_num' not in admin_state[adm_id]: return
@@ -696,7 +705,7 @@ def step_update_task_msg(message):
     finally: conn.close()
 
 # ==========================================
-# 👑 ADMIN: TASK REVIEW
+# 👑 3. FIXED: ADMIN TASK REVIEW (Flat List)
 # ==========================================
 def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
     status_filter = 'Approved' if is_completed else 'Pending'
@@ -721,13 +730,13 @@ def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
             
         markup = InlineKeyboardMarkup(row_width=1)
         for team in ['Team Alpha', 'Team Beta', 'Team Gamma']:
-            markup.add(InlineKeyboardButton(f"-- {team} --", callback_data="ignore"))
-            for m in teams[team]:
-                cb_data = "ignore" if is_completed else f"grd_{m['id']}"
-                markup.add(InlineKeyboardButton(f"{m['fb_name']}", callback_data=cb_data))
+            if teams[team]: # Only show team name if there are members who submitted
+                markup.add(InlineKeyboardButton(f"-- {team} --", callback_data="ignore"))
+                for m in teams[team]:
+                    cb_data = "ignore" if is_completed else f"grd_{m['id']}"
+                    markup.add(InlineKeyboardButton(f"{m['fb_name']}", callback_data=cb_data))
                 
         markup.row(InlineKeyboardButton("Back", callback_data="adm_back"), InlineKeyboardButton("Close" if is_completed else "Cancel", callback_data="cancel_action"))
-        
         text = "Task Completed List:" if is_completed else "Task Submitted List:"
         if message_id: 
             try: bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
@@ -820,12 +829,24 @@ def process_admin_feedback(message, sub_id):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
         sub = cursor.fetchone()
-        info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}\n◀️Feedback: {message.text}"
+        
+        # 🟢 1. FIXED: Feedback Preview Formatting
+        try:
+            items = json.loads(sub['content_text'])
+            cap = "\n\n".join([i['text'] for i in items])
+        except:
+            cap = sub['content_text']
+            
+        status_emoji = "Complete✅" if admin_state[ADMIN_CHAT_ID].get('action') == "approve" else "Failed❌"
+        info_text = f"{cap}\n\n🔺Task Status: {status_emoji}\n\n◀️Feedback: {message.text}"
+        
         markup = InlineKeyboardMarkup(row_width=2).row(InlineKeyboardButton("Send", callback_data=f"gsub_{sub_id}"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        bot.send_message(message.chat.id, info_text, reply_markup=markup)
+        if sub['photo_id']: bot.send_photo(message.chat.id, sub['photo_id'], caption=info_text, reply_markup=markup)
+        else: bot.send_message(message.chat.id, info_text, reply_markup=markup)
     finally: conn.close()
 
 def finalize_grading(sub_id, status_act, feedback, admin_chat_id):
+    # 🟢 5. FIXED: Clear Feedback Memory Leak
     if ADMIN_CHAT_ID in admin_state:
         admin_state[ADMIN_CHAT_ID].pop('feedback', None) 
         admin_state[ADMIN_CHAT_ID].pop('action', None)
@@ -833,13 +854,27 @@ def finalize_grading(sub_id, status_act, feedback, admin_chat_id):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT s.*, m.fb_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
+        cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
         sub = cursor.fetchone()
+        
+        # 🟢 1. FIXED: Final Formatting Send to User
+        try:
+            items = json.loads(sub['content_text'])
+            cap = "\n\n".join([i['text'] for i in items])
+        except:
+            cap = sub['content_text']
+
         if status_act == "approve":
             cursor.execute("UPDATE kbkh_submissions SET status = 'Approved' WHERE id = %s", (sub_id,))
-            user_msg = "Your task has been successfully reviewed and marked as completed!✅" + (f"\n◀️Feedback: {feedback}" if feedback else "")
+            if feedback:
+                user_msg = f"{cap}\n\n🔺Task Status: Complete✅\n\n◀️Feedback: {feedback}"
+                if sub['photo_id']: bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=user_msg)
+                else: bot.send_message(sub['telegram_id'], user_msg)
+            else:
+                bot.send_message(sub['telegram_id'], "Your task has been successfully reviewed and marked as completed!✅")
+                
             if sub['task_num'] == 3:
-                fwd_cap = f"{sub['content_text']}\nName: {sub['fb_name']}"
+                fwd_cap = f"{cap}\nName: {sub['fb_name']}" # 🟢 7. FIXED: Exact User Name
                 try:
                     if sub['photo_id']: bot.send_photo(PRIVATE_GROUP_ID, sub['photo_id'], caption=fwd_cap)
                     else: bot.send_message(PRIVATE_GROUP_ID, fwd_cap)
@@ -847,15 +882,36 @@ def finalize_grading(sub_id, status_act, feedback, admin_chat_id):
         else:
             cursor.execute("DELETE FROM kbkh_submissions WHERE id = %s", (sub_id,))
             cursor.execute("UPDATE kbkh_user_task_status SET completed = FALSE WHERE telegram_id = %s AND task_num = %s", (sub['telegram_id'], sub['task_num']))
-            user_msg = f"{sub['content_text'][:50]}...\nTask Status: Failed❌\n" + (f"◀️Feedback: {feedback}" if feedback else "Please try again. If the issue persists, contact a senior team member for assistance.")
+            user_msg = f"{cap}\n\n🔺Task Status: Failed❌\n\n" + (f"◀️Feedback: {feedback}" if feedback else "Please try again. If the issue persists, contact a senior team member for assistance.")
+            if sub['photo_id']: bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=user_msg)
+            else: bot.send_message(sub['telegram_id'], user_msg)
+        
         conn.commit()
-        try: bot.send_message(sub['telegram_id'], user_msg)
-        except: pass
         render_admin_submission_list(admin_chat_id, None, False)
+        
+        # 🟢 6. FIXED: Realtime Auto-End Check right after approval
+        if status_act == "approve":
+            cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (sub['team_name'],))
+            total_m = cursor.fetchone()['count']
+            cursor.execute("""
+                SELECT COUNT(DISTINCT s.telegram_id) FROM kbkh_submissions s
+                JOIN members m ON s.telegram_id = m.telegram_id
+                WHERE m.team_name = %s AND s.task_num = %s AND s.status = 'Approved'
+            """, (sub['team_name'], sub['task_num']))
+            done_m = cursor.fetchone()['count']
+            
+            if total_m > 0 and done_m >= total_m:
+                cursor.execute("DELETE FROM kbkh_active_assignments WHERE team_name = %s AND task_num = %s", (sub['team_name'], sub['task_num']))
+                cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (sub['team_name'],))
+                for u in cursor.fetchall():
+                    try: bot.send_message(u['telegram_id'], "Task END!\nThank you dear member♥️")
+                    except: pass
+                conn.commit()
+                
     finally: conn.close()
 
 # ==========================================
-# ⏰ BACKGROUND AUTO-TIMER (Auto-End Fixed)
+# ⏰ BACKGROUND AUTO-TIMER
 # ==========================================
 def auto_task_timer():
     while True:
@@ -886,7 +942,7 @@ def auto_task_timer():
                 
                 cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
                 total_members = cursor.fetchone()['count']
-                cursor.execute("SELECT COUNT(DISTINCT telegram_id) FROM kbkh_submissions WHERE team_name = %s AND task_num = %s AND status = 'Approved'", (team, t_num))
+                cursor.execute("SELECT COUNT(DISTINCT s.telegram_id) FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE m.team_name = %s AND s.task_num = %s AND s.status = 'Approved'", (team, t_num))
                 done_members = cursor.fetchone()['count']
                 
                 if total_members > 0 and done_members >= total_members:
@@ -940,7 +996,7 @@ def coming_soon(message):
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=auto_task_timer, daemon=True).start()
-    print("🤖 KBKh Task Bot is Fast, Secure, and Fully Isolated from BKLn...")
+    print("🤖 KBKh Task Bot is Fast, Secure, and Fully Isolated...")
     try: bot.remove_webhook(); time.sleep(2)
     except: pass
     while True:
