@@ -19,9 +19,9 @@ from flask import Flask
 # ==========================================
 # ⚙️ CONFIGURATION & ENVIRONMENT
 # ==========================================
-BOT_TOKEN = "8868042763:AAHHKMQCQ8yFrF6OkrywTNoV4urwWFUdWys"
-DB_URI = "postgresql://postgres.knktfswiljvqttbnlufg:%23%23RoKy5502%23%23@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
-ADMIN_CHAT_ID = "8383532004"
+BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "8868042763:AAHHKMQCQ8yFrF6OkrywTNoV4urwWFUdWys").strip()
+DB_URI = (os.environ.get("DATABASE_URL") or "postgresql://postgres.knktfswiljvqttbnlufg:%23%23RoKy5502%23%23@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres").strip()
+ADMIN_CHAT_ID = (os.environ.get("ADMIN_ID") or "8383532004").strip()
 PRIVATE_GROUP_ID = -1004465038452
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=20)
@@ -29,7 +29,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "KBKh Task Bot (5 Doors) is Alive, Fast & Error-Free!", 200
+    return "KBKh Task Bot (5 Doors) is Alive & Perfect!", 200
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
@@ -38,8 +38,10 @@ def get_bd_time():
     return datetime.utcnow() + timedelta(hours=6)
 
 def get_db_connection():
-    # Added connect_timeout=10 to prevent 2-3 days server hang/deadlocks
-    return psycopg2.connect(DB_URI, connect_timeout=10)
+    uri = DB_URI
+    if uri.startswith("postgres://"):
+        uri = uri.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(uri, connect_timeout=10)
 
 # ==========================================
 # 🛠️ DATABASE SETUP (Fully Isolated)
@@ -54,91 +56,46 @@ def init_db():
         # Original Task Tables
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kbkh_active_assignments (
-                id SERIAL PRIMARY KEY, 
-                team_name TEXT, 
-                task_num INT, 
-                scheduled_for TIMESTAMP, 
-                is_started BOOLEAN DEFAULT FALSE, 
-                current_msg INT DEFAULT 0
+                id SERIAL PRIMARY KEY, team_name TEXT, task_num INT, 
+                scheduled_for TIMESTAMP, is_started BOOLEAN DEFAULT FALSE, current_msg INT DEFAULT 0
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_submissions (
-                id SERIAL PRIMARY KEY, 
-                telegram_id BIGINT, 
-                task_num INT, 
-                content_type TEXT, 
-                content_text TEXT, 
-                photo_id TEXT, 
-                status TEXT DEFAULT 'Pending', 
-                feedback TEXT, 
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id SERIAL PRIMARY KEY, telegram_id BIGINT, task_num INT, content_type TEXT, 
+                content_text TEXT, photo_id TEXT, status TEXT DEFAULT 'Pending', 
+                feedback TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_tasks (
-                id SERIAL PRIMARY KEY, 
-                task_num INT UNIQUE, 
-                msg_1 TEXT, 
-                msg_2 TEXT, 
-                msg_3 TEXT
+                id SERIAL PRIMARY KEY, task_num INT UNIQUE, msg_1 TEXT, msg_2 TEXT, msg_3 TEXT
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_organized_tasks (
-                id SERIAL PRIMARY KEY, 
-                sequence TEXT
+                id SERIAL PRIMARY KEY, sequence TEXT
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_question_bank (
-                id SERIAL PRIMARY KEY, 
-                telegram_id BIGINT, 
-                task_num INT, 
-                question_text TEXT, 
-                month TEXT
+                id SERIAL PRIMARY KEY, telegram_id BIGINT, task_num INT, question_text TEXT, month TEXT
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_user_task_status (
-                telegram_id BIGINT, 
-                task_num INT, 
-                completed BOOLEAN DEFAULT FALSE, 
-                UNIQUE(telegram_id, task_num)
+                telegram_id BIGINT, task_num INT, completed BOOLEAN DEFAULT FALSE, UNIQUE(telegram_id, task_num)
             );
         """)
 
         # QnA & Tracking Tables
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kbkh_qna_moderators (
-                telegram_id BIGINT PRIMARY KEY, 
-                mod_name TEXT, 
-                team_name TEXT, 
-                is_active BOOLEAN DEFAULT TRUE, 
-                total_assigned INT DEFAULT 0, 
-                resign_count INT DEFAULT 0, 
-                is_blocked BOOLEAN DEFAULT FALSE
+                telegram_id BIGINT PRIMARY KEY, mod_name TEXT, team_name TEXT, 
+                is_active BOOLEAN DEFAULT TRUE, total_assigned INT DEFAULT 0, 
+                resign_count INT DEFAULT 0, is_blocked BOOLEAN DEFAULT FALSE
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_qna_submissions (
-                id SERIAL PRIMARY KEY, 
-                telegram_id BIGINT, 
-                q_dict TEXT, 
-                a_dict TEXT, 
-                status TEXT DEFAULT 'Pending', 
-                assigned_grader BIGINT, 
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-                feedback TEXT, 
-                mark INT
+                id SERIAL PRIMARY KEY, telegram_id BIGINT, q_dict TEXT, a_dict TEXT, 
+                status TEXT DEFAULT 'Pending', assigned_grader BIGINT, 
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, feedback TEXT, mark INT
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_task_records (
-                telegram_id BIGINT, 
-                month TEXT, 
-                task_done INT DEFAULT 0, 
-                task_total INT DEFAULT 0, 
-                qna_mark INT DEFAULT 0, 
-                UNIQUE(telegram_id, month)
+                telegram_id BIGINT, month TEXT, task_done INT DEFAULT 0, 
+                task_total INT DEFAULT 0, qna_mark INT DEFAULT 0, UNIQUE(telegram_id, month)
             );
-            
             CREATE TABLE IF NOT EXISTS kbkh_custom_instructions (
-                id INT PRIMARY KEY, 
-                instruction_text TEXT
+                id INT PRIMARY KEY, instruction_text TEXT
             );
         """)
         
@@ -163,8 +120,6 @@ def init_db():
         conn.close()
 
 init_db()
-
-# State Dictionaries (Fixed Isolation)
 user_state = {}
 admin_state = {}
 
@@ -343,7 +298,6 @@ def finalize_qna_login(call):
         bot.send_message(call.message.chat.id, "Welcome Sir❤️\nYou are now in QnA Marking Team!", reply_markup=qna_marking_menu())
     finally:
         conn.close()
-        
     user_state.pop(tg_id, None)
 
 # ==========================================
@@ -499,7 +453,7 @@ def process_qna_submit(call):
     
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception:
+    except:
         pass
         
     conn = get_db_connection()
@@ -519,7 +473,6 @@ def process_qna_submit(call):
         bot.send_message(call.message.chat.id, "Submitted successfully. Please wait for feedback. Thank you!❤️")
     finally:
         conn.close()
-        
     user_state.pop(tg_id, None)
 
 # ==========================================
@@ -544,7 +497,6 @@ def confirm_qna_resign(call):
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("UPDATE kbkh_qna_moderators SET is_active = FALSE, resign_count = resign_count + 1 WHERE telegram_id = %s", (tg_id,))
-        
         cursor.execute("SELECT id FROM kbkh_qna_submissions WHERE assigned_grader = %s AND status = 'Pending'", (tg_id,))
         pending = cursor.fetchall()
         
@@ -558,7 +510,7 @@ def confirm_qna_resign(call):
         
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
         
         user = check_member_registration(tg_id)
@@ -577,7 +529,6 @@ def qna_pending_list(message):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT is_active FROM kbkh_qna_moderators WHERE telegram_id = %s", (tg_id,))
         mod = cursor.fetchone()
-        
         if not mod or not mod['is_active']:
             return
         
@@ -657,7 +608,7 @@ def toggle_qna_team(call):
         markup.add(InlineKeyboardButton("Close", callback_data="cancel_action"))
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except Exception:
+        except:
             pass
     finally:
         conn.close()
@@ -674,13 +625,12 @@ def fetch_user_qna(call):
     
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception:
+    except:
         pass
     
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        # Limit 2 applied here as requested
         cursor.execute("SELECT * FROM kbkh_qna_submissions WHERE assigned_grader = %s AND telegram_id = %s AND status = 'Pending' ORDER BY id ASC LIMIT 2", (mod_id, target_user))
         submissions = cursor.fetchall()
         
@@ -729,7 +679,7 @@ def qna_grading_actions(call):
         admin_state[mod_id][f'qmark_{sub_id}'] = mark
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_qna_grading_kb(sub_id, mark))
-        except Exception:
+        except:
             pass
         
     elif action == "subfb":
@@ -739,7 +689,7 @@ def qna_grading_actions(call):
             
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=get_inline_cancel())
@@ -752,7 +702,7 @@ def qna_grading_actions(call):
             
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         finalize_qna_grading(sub_id, mark, None, mod_id)
@@ -785,7 +735,6 @@ def process_qna_feedback(message, sub_id):
         conn.close()
 
 def finalize_qna_grading(sub_id, mark, feedback, mod_id):
-    # Fetch feedback if it was cached
     if not feedback and f'qfbk_{sub_id}' in admin_state.get(mod_id, {}):
         feedback = admin_state[mod_id][f'qfbk_{sub_id}']
         
@@ -823,13 +772,12 @@ def finalize_qna_grading(sub_id, mark, feedback, mod_id):
         
         try:
             send_qna_preview(sub['telegram_id'], q_dict, a_dict)
-        except Exception:
+        except:
             pass
             
     finally:
         conn.close()
     
-    # Cleanup memory
     if mod_id in admin_state:
         admin_state[mod_id].pop(f'qmark_{sub_id}', None)
         admin_state[mod_id].pop(f'qfbk_{sub_id}', None)
@@ -867,7 +815,7 @@ def status_callbacks(call):
     if call.data == "back_modst":
         try:
             bot.edit_message_text("🗓️Please Select Month:", call.message.chat.id, call.message.message_id, reply_markup=get_months_kb("modst"))
-        except Exception:
+        except:
             pass
         return
         
@@ -889,7 +837,7 @@ def status_callbacks(call):
             text = f"🗓️ Month - {month}\n\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}"
             try:
                 bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_inline_cancel())
-            except Exception:
+            except:
                 pass
         finally:
             conn.close()
@@ -929,7 +877,6 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
         for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
             if not teams[t]:
                 continue
-                
             text += f"🔶--{t}--🔶\n"
             for m in teams[t]:
                 if m['telegram_id'] == expanded_u:
@@ -949,7 +896,7 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
         markup.row(InlineKeyboardButton("Back", callback_data="back_modst"), InlineKeyboardButton("Close", callback_data="cancel_action"))
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        except Exception:
+        except:
             pass
     finally:
         conn.close()
@@ -998,7 +945,7 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
         if message_id:
             try:
                 bot.edit_message_text("Admin Moderators Panel:", chat_id, message_id, reply_markup=markup)
-            except Exception:
+            except:
                 pass
         else:
             bot.send_message(chat_id, "Admin Moderators Panel:", reply_markup=markup)
@@ -1067,14 +1014,14 @@ def admin_mod_actions(call):
                         
                 try:
                     bot.send_message(target['id'], "You are not registered!❌", reply_markup=ReplyKeyboardRemove())
-                except Exception:
+                except:
                     pass
                     
             conn.commit()
             
             try:
                 bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
+            except:
                 pass
                 
             bot.send_message(call.message.chat.id, "Action executed successfully!✅")
@@ -1286,7 +1233,7 @@ def task_flow_callbacks(call):
     tg_id = call.from_user.id
     try:
         bot.answer_callback_query(call.id)
-    except Exception:
+    except:
         pass
         
     if tg_id in user_state:
@@ -1295,7 +1242,7 @@ def task_flow_callbacks(call):
     if call.data == "force_add_q":
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         temp = user_state[tg_id].pop('temp_hold', None)
@@ -1305,7 +1252,7 @@ def task_flow_callbacks(call):
     elif call.data == "add_more_q":
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         msg_box = bot.send_message(call.message.chat.id, "Please add the next question:", reply_markup=get_inline_cancel())
@@ -1314,7 +1261,7 @@ def task_flow_callbacks(call):
     elif call.data == "final_submit_task":
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         state = user_state.get(tg_id, {})
@@ -1359,7 +1306,7 @@ def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
             if message_id: 
                 try: 
                     bot.edit_message_text(msg, chat_id, message_id, reply_markup=get_inline_cancel())
-                except Exception: 
+                except: 
                     pass
             else:
                 bot.send_message(chat_id, msg, reply_markup=get_inline_cancel())
@@ -1385,7 +1332,7 @@ def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
         if message_id: 
             try: 
                 bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-            except Exception: 
+            except: 
                 pass
         else:
             bot.send_message(chat_id, text, reply_markup=markup)
@@ -1397,7 +1344,7 @@ def admin_grading_actions(call):
     adm_id = call.from_user.id
     try:
         bot.answer_callback_query(call.id)
-    except Exception:
+    except:
         pass
         
     if call.data == "ignore":
@@ -1409,7 +1356,7 @@ def admin_grading_actions(call):
         markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         try:
             bot.edit_message_text("Task Menu:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except Exception:
+        except:
             pass
         
     elif call.data in ["adm_tsub", "adm_tcomp"]:
@@ -1437,7 +1384,7 @@ def admin_grading_actions(call):
             
             try:
                 bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
+            except:
                 pass
             
             try:
@@ -1447,7 +1394,7 @@ def admin_grading_actions(call):
                         bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
                     else:
                         bot.send_message(call.message.chat.id, item.get('text', ''))
-            except Exception:
+            except:
                 if sub['photo_id']:
                     bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
                 else:
@@ -1470,14 +1417,14 @@ def admin_grading_actions(call):
         admin_state[adm_id]['action'] = act
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_admin_grading_kb(sub_id, act))
-        except Exception:
+        except:
             pass
         
     elif call.data.startswith("gfbk_"):
         sub_id = int(call.data.split("_")[1])
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         markup = get_inline_cancel()
@@ -1494,7 +1441,7 @@ def admin_grading_actions(call):
             
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
+        except:
             pass
             
         finalize_grading(sub_id, act, feedback, adm_id, call.message.chat.id)
@@ -1529,7 +1476,6 @@ def process_admin_feedback(message, sub_id):
         conn.close()
 
 def finalize_grading(sub_id, status_act, feedback, adm_id, chat_id):
-    # Isolated state clear for specific admin
     if adm_id in admin_state:
         admin_state[adm_id].pop('feedback', None) 
         admin_state[adm_id].pop('action', None)
@@ -1607,7 +1553,7 @@ def finalize_grading(sub_id, status_act, feedback, adm_id, chat_id):
                 for u in users_to_notify:
                     try:
                         bot.send_message(u['telegram_id'], "Task END!\nThank you dear member♥️")
-                    except Exception:
+                    except:
                         pass
                         
     finally:
@@ -1624,12 +1570,12 @@ def simple_cancel(call):
         
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception:
+    except:
         pass
         
     try:
         bot.clear_step_handler_by_chat_id(call.message.chat.id)
-    except Exception:
+    except:
         pass
 
 # ==========================================
@@ -1706,12 +1652,11 @@ def auto_task_timer():
             finally:
                 conn.close()
                 
-            # Execute Network calls OUTSIDE the DB block to prevent DB jam!
             for action in actions_to_take:
                 for uid in action['users']:
                     try:
                         bot.send_message(uid, action['msg'])
-                    except Exception:
+                    except:
                         pass
                         
         except Exception as e:
@@ -1739,24 +1684,17 @@ if __name__ == "__main__":
     
     print("🤖 KBKh Task Bot is Fast, Secure, and Fully Restored...")
     
-    # 409 Conflict Prevention Block
+    # 409 Conflict & Hang Prevention Block
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except:
+        pass
+
     while True:
         try:
-            # Forcefully detach any ghost webhooks before polling
-            bot.remove_webhook(drop_pending_updates=True)
-            time.sleep(2)
-            
             # Start Polling with strict timeouts
-            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
-            
-        except telebot.apihelper.ApiTelegramException as e:
-            if e.error_code == 409:
-                print("⚠️ Telegram API 409 Conflict Detected! Another instance is running. Retrying in 10s...")
-                time.sleep(10)
-            else:
-                print(f"Telegram API Error: {e}")
-                time.sleep(5)
-                
+            bot.infinity_polling(timeout=30, long_polling_timeout=30)
         except Exception as e:
-            print(f"General Error: {e}")
+            print(f"Polling Error: {e}")
             time.sleep(5)
