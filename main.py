@@ -99,7 +99,7 @@ def init_db():
             2: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!",
             3: "উত্তরের মান উন্নত করা প্রয়োজন!", 
             4: "মোটামুটি ভালো হয়েছে। আরও ভালো করার চেষ্টা করতে হবে।",
-            5: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে ক্ষমতায় থাকতে হবে।", 
+            5: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে হবে।", 
             6: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে হবে।"
         }
         for k, v in default_inst.items():
@@ -924,6 +924,11 @@ def universal_cancel_action(call):
     except:
         pass
         
+    if user_id in admin_state and 'task_msgs' in admin_state[user_id]:
+        for m_id in admin_state[user_id]['task_msgs']:
+            try: bot.delete_message(call.message.chat.id, m_id)
+            except: pass
+
     if user_id in admin_state:
         admin_state.pop(user_id, None)
     if user_id in user_state:
@@ -1085,6 +1090,7 @@ def central_admin_actions(call):
                 
             admin_state[adm_id]['grading_sub'] = sub_id
             admin_state[adm_id]['action'] = None
+            admin_state[adm_id]['task_msgs'] = []
             
             try:
                 bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -1095,14 +1101,16 @@ def central_admin_actions(call):
                 items = json.loads(sub['content_text'])
                 for item in items:
                     if item.get('photo'):
-                        bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
+                        m = bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
                     else:
-                        bot.send_message(call.message.chat.id, item.get('text', ''))
+                        m = bot.send_message(call.message.chat.id, item.get('text', ''))
+                    admin_state[adm_id]['task_msgs'].append(m.message_id)
             except:
                 if sub['photo_id']:
-                    bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
+                    m = bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
                 else:
-                    bot.send_message(call.message.chat.id, sub['content_text'])
+                    m = bot.send_message(call.message.chat.id, sub['content_text'])
+                admin_state[adm_id]['task_msgs'].append(m.message_id)
                 
             info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}"
             markup = get_admin_grading_kb(sub_id)
@@ -1129,8 +1137,13 @@ def central_admin_actions(call):
         except:
             pass
             
+        for m_id in admin_state.get(adm_id, {}).get('task_msgs', []):
+            try: bot.delete_message(call.message.chat.id, m_id)
+            except: pass
+            
         markup = get_inline_cancel()
         msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=markup)
+        admin_state[adm_id]['prompt_msg_id'] = msg_box.message_id
         bot.register_next_step_handler(msg_box, process_admin_feedback, sub_id)
         return
         
@@ -1490,8 +1503,8 @@ def central_admin_actions(call):
 # ==========================================
 def get_admin_grading_kb(sub_id, act=None):
     markup = InlineKeyboardMarkup(row_width=2)
-    app_icon = "✅ Approve 🟢" if act == "Approve" else "✅ Approve"
-    rej_icon = "❌ Reject 🔴" if act == "Reject" else "❌ Reject"
+    app_icon = "Approve✅" if act == "Approve" else "Approve"
+    rej_icon = "Reject❌" if act == "Reject" else "Reject"
     
     markup.row(InlineKeyboardButton(app_icon, callback_data=f"gact_{sub_id}_Approve"), InlineKeyboardButton(rej_icon, callback_data=f"gact_{sub_id}_Reject"))
     markup.row(InlineKeyboardButton("💬 Feedback", callback_data=f"gfbk_{sub_id}"), InlineKeyboardButton("Submit", callback_data=f"gsub_{sub_id}"))
@@ -1505,13 +1518,36 @@ def process_admin_feedback(message, sub_id):
         
     admin_state[adm_id]['feedback'] = message.text
     
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
+    prompt_id = admin_state.get(adm_id, {}).get('prompt_msg_id')
+    if prompt_id:
+        try: bot.delete_message(message.chat.id, prompt_id)
+        except: pass
+    
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
+        cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
         sub = cursor.fetchone()
         
         if sub:
+            admin_state[adm_id]['task_msgs'] = []
+            try:
+                items = json.loads(sub['content_text'])
+                for item in items:
+                    if item.get('photo'):
+                        m = bot.send_photo(message.chat.id, item['photo'], caption=item.get('text', ''))
+                    else:
+                        m = bot.send_message(message.chat.id, item.get('text', ''))
+                    admin_state[adm_id]['task_msgs'].append(m.message_id)
+            except:
+                if sub['photo_id']:
+                    m = bot.send_photo(message.chat.id, sub['photo_id'], caption=sub['content_text'])
+                else:
+                    m = bot.send_message(message.chat.id, sub['content_text'])
+                admin_state[adm_id]['task_msgs'].append(m.message_id)
+
             info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}\n\n📝 Feedback Added:\n{message.text}"
             act = admin_state[adm_id].get('action')
             markup = get_admin_grading_kb(sub_id, act)
@@ -1542,14 +1578,33 @@ def finalize_grading(sub_id, act, feedback, adm_id, chat_id):
             
         conn.commit()
         
-        msg_to_user = f"📌 আপনার Special Task {sub['task_num']} এর স্ট্যাটাস আপডেট করা হয়েছে।\n\nস্ট্যাটাস: {status_update}"
-        if feedback:
-            msg_to_user += f"\n\nঅ্যাডমিনের মন্তব্য:\n{feedback}"
-            
+        base_msg = "We have reviewed your task and it has been ACCEPTED✅" if act == "Approve" else "Your task has been REJECTED❌"
+        
         try:
-            bot.send_message(sub['telegram_id'], msg_to_user)
-        except:
-            pass
+            if feedback:
+                try:
+                    items = json.loads(sub['content_text'])
+                    for item in items:
+                        if item.get('photo'):
+                            bot.send_photo(sub['telegram_id'], item['photo'], caption=item.get('text', ''))
+                        else:
+                            bot.send_message(sub['telegram_id'], item.get('text', ''))
+                except:
+                    if sub['photo_id']:
+                        bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=sub['content_text'])
+                    else:
+                        bot.send_message(sub['telegram_id'], sub['content_text'])
+                        
+                fb_msg = f"{base_msg}\n\n⏩ FEEDBACK: {feedback}"
+                bot.send_message(sub['telegram_id'], fb_msg)
+            else:
+                bot.send_message(sub['telegram_id'], base_msg)
+        except Exception as e:
+            print("User notify error:", e)
+            
+        for m_id in admin_state.get(adm_id, {}).get('task_msgs', []):
+            try: bot.delete_message(chat_id, m_id)
+            except: pass
             
         bot.send_message(chat_id, f"Task successfully {status_update}!✅")
     finally:
@@ -1559,6 +1614,8 @@ def finalize_grading(sub_id, act, feedback, adm_id, chat_id):
         admin_state[adm_id].pop('action', None)
         admin_state[adm_id].pop('feedback', None)
         admin_state[adm_id].pop('grading_sub', None)
+        admin_state[adm_id].pop('task_msgs', None)
+        admin_state[adm_id].pop('prompt_msg_id', None)
 
 def render_ta_assign_page(chat_id, message_id, adm_id):
     state = admin_state.get(adm_id, {}).get('assigning', {})
@@ -1971,7 +2028,7 @@ def check_and_process_task_question(message, question_text, is_photo=False, phot
         user_state[tg_id]['temp_hold'] = {'q': question_text, 'p': photo_id}
         warn_msg = (f"↗️Your Question: {matched_line}\n\n"
                     f"↘️ Previously Submitted Question:\n{match['question_text']}\n\n"
-                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে না। "
+                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে ভগ। "
                     f"আপনার যদি মনে হয় Ai ভুল করছে তাহলে 'Submit Anyway' Button চেপে সাবমিট করতে পারবেন।")
         
         markup = InlineKeyboardMarkup()
