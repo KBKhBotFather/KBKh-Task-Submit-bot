@@ -351,7 +351,7 @@ def handle_task_routing(message):
         conn.close()
 
 # ==========================================
-# 🟢 ADMIN ONLY MENUS
+# 🟢 ADMIN ONLY MENUS (Fixed Handlers)
 # ==========================================
 @bot.message_handler(func=lambda msg: msg.text in ["Task Assign", "Triggered Task", "Reset Task Data", "Edit Instructions"])
 def admin_management_buttons(message):
@@ -370,7 +370,6 @@ def admin_management_buttons(message):
         conn = get_db_connection()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            # Only show teams that are actually in members table for safety
             cursor.execute("""
                 SELECT a.team_name, a.task_num, a.is_started 
                 FROM kbkh_active_assignments a
@@ -866,29 +865,27 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
         cursor.execute("SELECT telegram_id, mod_name, team_name, total_assigned FROM kbkh_qna_moderators WHERE is_active = TRUE")
         mods = cursor.fetchall()
         
+        # Design fix: row_width=3 to give name button more space
         markup = InlineKeyboardMarkup(row_width=3)
-        exp_team = admin_state.get(adm_id, {}).get('admin_mod_exp')
         
-        if exp_team == 'qna':
-            markup.add(InlineKeyboardButton("QnA Making Team 🔻", callback_data="amod_qna"))
-            teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': []}
-            for m in mods:
-                if m['team_name'] in teams:
-                    teams[m['team_name']].append(m)
-            
-            for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
-                if teams[t]:
-                    markup.add(InlineKeyboardButton(f"--{t}--", callback_data="ignore"))
-                    for m in teams[t]:
-                        btn_name = InlineKeyboardButton(f"{m['mod_name']} - {m['total_assigned']}", callback_data="ignore")
-                        btn_blk = InlineKeyboardButton("⛔", callback_data=f"amodblk_{m['telegram_id']}")
-                        btn_kck = InlineKeyboardButton("❌", callback_data=f"amodkck_{m['telegram_id']}")
-                        markup.row(btn_name, btn_blk, btn_kck)
-                        
-            markup.add(InlineKeyboardButton("Submit", callback_data="amod_sub"))
-        else:
-            markup.add(InlineKeyboardButton("QnA Making Team 🔺", callback_data="amod_qna"))
-            
+        markup.add(InlineKeyboardButton("QnA Making Team 🔻", callback_data="amod_qna"))
+        
+        teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': []}
+        for m in mods:
+            if m['team_name'] in teams:
+                teams[m['team_name']].append(m)
+        
+        for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
+            if teams[t]:
+                markup.add(InlineKeyboardButton(f"--{t}--", callback_data="ignore"))
+                for m in teams[t]:
+                    # Create 3 buttons in one row for better UI
+                    btn_name = InlineKeyboardButton(f"{m['mod_name']} - {m['total_assigned']}", callback_data="ignore")
+                    btn_blk = InlineKeyboardButton("⛔", callback_data=f"amodblk_{m['telegram_id']}")
+                    btn_kck = InlineKeyboardButton("❌", callback_data=f"amodkck_{m['telegram_id']}")
+                    markup.row(btn_name, btn_blk, btn_kck)
+                    
+        markup.add(InlineKeyboardButton("Submit", callback_data="amod_sub"))
         markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
@@ -901,8 +898,11 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
     finally:
         conn.close()
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_"))
-def admin_mod_actions(call):
+# ==========================================
+# ⚙️ ADMIN ACTIONS HANDLER
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_") or call.data.startswith("ta_") or call.data.startswith("ei_") or call.data.startswith("ti_") or call.data.startswith("mi_") or call.data == "reset_task_yes")
+def central_admin_actions(call):
     adm_id = call.from_user.id
     if str(adm_id) != ADMIN_CHAT_ID:
         return
@@ -912,34 +912,34 @@ def admin_mod_actions(call):
     except:
         pass
     
-    if call.data == "amod_qna":
-        if adm_id not in admin_state:
-            admin_state[adm_id] = {}
-        curr = admin_state[adm_id].get('admin_mod_exp')
-        admin_state[adm_id]['admin_mod_exp'] = None if curr == 'qna' else 'qna'
+    data = call.data
+    if adm_id not in admin_state:
+        admin_state[adm_id] = {}
+
+    # 1. Moderators Panel Actions
+    if data == "amod_qna":
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
+        return
         
-    elif call.data.startswith("amodblk_"):
-        tg = int(call.data.split("_")[1])
-        if adm_id not in admin_state:
-            admin_state[adm_id] = {}
+    elif data.startswith("amodblk_"):
+        tg = int(data.split("_")[1])
         admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'block'}
         try:
             bot.answer_callback_query(call.id, "Block selected. Press Submit.", show_alert=True)
         except:
             pass
+        return
         
-    elif call.data.startswith("amodkck_"):
-        tg = int(call.data.split("_")[1])
-        if adm_id not in admin_state:
-            admin_state[adm_id] = {}
+    elif data.startswith("amodkck_"):
+        tg = int(data.split("_")[1])
         admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'kick'}
         try:
-            bot.answer_callback_query(call.id, "Kick selected. Press Submit.", show_alert=True)
+            bot.answer_callback_query(call.id, "Cross selected. Press Submit.", show_alert=True)
         except:
             pass
+        return
         
-    elif call.data == "amod_sub":
+    elif data == "amod_sub":
         target = admin_state.get(adm_id, {}).get('mod_target')
         if not target:
             return bot.answer_callback_query(call.id, "Select action first!", show_alert=True)
@@ -978,6 +978,366 @@ def admin_mod_actions(call):
             conn.close()
             
         admin_state[adm_id].pop('mod_target', None)
+        return
+
+    # 2. Reset Data Action
+    if data == "reset_task_yes":
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # Only user submitted data is deleted. Tasks and Instructions remain intact.
+            cursor.execute("DELETE FROM kbkh_user_task_status;")
+            cursor.execute("DELETE FROM kbkh_active_assignments;")
+            cursor.execute("DELETE FROM kbkh_submissions;")
+            cursor.execute("DELETE FROM kbkh_question_bank;")
+            cursor.execute("DELETE FROM kbkh_qna_submissions;")
+            cursor.execute("DELETE FROM kbkh_task_records;")
+            cursor.execute("UPDATE kbkh_qna_moderators SET total_assigned = 0;")
+            conn.commit()
+            
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except:
+                pass
+            bot.send_message(call.message.chat.id, "All Member Data has been permanently reset!✅")
+        finally:
+            conn.close()
+        return
+
+    # 3. Task Assign & Organize Flow
+    if data == "ta_main":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(InlineKeyboardButton("Add Task", callback_data="ta_add"), InlineKeyboardButton("Task List", callback_data="ta_list"))
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data == "ta_list":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(InlineKeyboardButton("Organize Task", callback_data="ta_org"), InlineKeyboardButton("Assign Task", callback_data="ta_assign"))
+        markup.row(InlineKeyboardButton("Back", callback_data="ta_main"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data == "ta_add":
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(task_num) FROM kbkh_tasks")
+            row = cursor.fetchone()
+            next_t = (row[0] if row[0] is not None else 0) + 1
+            
+            admin_state[adm_id]['t_num'] = next_t
+            admin_state[adm_id]['clean_msgs'] = []
+            
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            msg = bot.send_message(call.message.chat.id, f"Give the first message of the Task -{next_t}:", reply_markup=get_inline_cancel())
+            admin_state[adm_id]['clean_msgs'].append(msg.message_id)
+            bot.register_next_step_handler(msg, step_add_msg1)
+        finally:
+            conn.close()
+        return
+
+    if data.startswith("ta_end_"):
+        try: bot.clear_step_handler_by_chat_id(call.message.chat.id)
+        except: pass
+        
+        if 'clean_msgs' in admin_state[adm_id]: 
+            admin_state[adm_id]['clean_msgs'].append(call.message.message_id)
+        
+        state = admin_state.get(adm_id, {})
+        t_num = state.get('t_num')
+        if not t_num: return
+        
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO kbkh_tasks (task_num, msg_1, msg_2, msg_3) 
+                VALUES (%s, %s, %s, %s) 
+                ON CONFLICT (task_num) DO UPDATE 
+                SET msg_1=EXCLUDED.msg_1, msg_2=EXCLUDED.msg_2, msg_3=EXCLUDED.msg_3
+            """, (t_num, state.get('msg_1'), state.get('msg_2'), state.get('msg_3')))
+            conn.commit()
+            
+            for m_id in state.get('clean_msgs', []):
+                try: bot.delete_message(call.message.chat.id, m_id)
+                except: pass
+                
+            admin_state[adm_id].pop('t_num', None)
+            admin_state[adm_id].pop('clean_msgs', None)
+            
+            bot.send_message(call.message.chat.id, f"All your messages for Task-{t_num} have been successfully added!✅")
+        finally:
+            conn.close()
+        return
+
+    if data == "ta_org":
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        msg = bot.send_message(call.message.chat.id, "Please provide the list.\n(Example: 1,2,3)", reply_markup=get_inline_cancel())
+        bot.register_next_step_handler(msg, step_org_task)
+        return
+
+    if data == "ta_assign":
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT COUNT(*) FROM kbkh_active_assignments")
+            if cursor.fetchone()['count'] > 0: 
+                return bot.answer_callback_query(call.id, "Already assigned a Task! Please stop it first in Triggered Task.", show_alert=True)
+                
+            admin_state[adm_id]['assigning'] = {'selected': None}
+            render_ta_assign_page(call.message.chat.id, call.message.message_id, adm_id)
+        finally:
+            conn.close()
+        return
+
+    if data.startswith("ta_asgsel_"):
+        org_id = int(data.split("_")[2])
+        curr_sel = admin_state[adm_id].get('assigning', {}).get('selected')
+        admin_state[adm_id]['assigning']['selected'] = None if curr_sel == org_id else org_id
+        render_ta_assign_page(call.message.chat.id, call.message.message_id, adm_id)
+        return
+
+    if data == "ta_asgdel":
+        selected_id = admin_state[adm_id].get('assigning', {}).get('selected')
+        if not selected_id: return
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM kbkh_organized_tasks WHERE id = %s", (selected_id,))
+            conn.commit()
+            
+            admin_state[adm_id]['assigning']['selected'] = None
+            render_ta_assign_page(call.message.chat.id, call.message.message_id, adm_id)
+        finally:
+            conn.close()
+        return
+
+    if data == "ta_asgsub":
+        org_id = admin_state[adm_id].get('assigning', {}).get('selected')
+        if not org_id: return
+        
+        seq_str = next((o['sequence'] for o in admin_state[adm_id].get('assigning', {}).get('orgs', []) if o['id'] == org_id), None)
+        if not seq_str: return
+        
+        tasks = seq_str.split(',')
+        teams = ['Team Alpha', 'Team Beta', 'Team Gamma']
+        next_midnight = datetime.combine(get_bd_time().date() + timedelta(days=1), datetime.min.time())
+        
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            for i, t_num in enumerate(tasks):
+                if i < len(teams):
+                    cursor.execute("DELETE FROM kbkh_active_assignments WHERE team_name = %s", (teams[i],))
+                    cursor.execute("DELETE FROM kbkh_user_task_status WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
+                    cursor.execute("DELETE FROM kbkh_submissions WHERE task_num = %s AND telegram_id IN (SELECT telegram_id FROM members WHERE team_name = %s)", (int(t_num), teams[i]))
+                    cursor.execute("INSERT INTO kbkh_active_assignments (team_name, task_num, scheduled_for, is_started, current_msg) VALUES (%s, %s, %s, FALSE, 0)", (teams[i], int(t_num), next_midnight))
+            conn.commit()
+            
+            admin_state[adm_id]['assigning']['selected'] = None
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            bot.send_message(call.message.chat.id, f"Task: {seq_str.replace(',',' ')} Assigned Successfully✅\nWill trigger at Midnight.")
+        finally:
+            conn.close()
+        return
+
+    if data == "ta_stop":
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM kbkh_active_assignments WHERE is_started = FALSE")
+            conn.commit()
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            bot.send_message(call.message.chat.id, "Task Assign Cancelled Successfully✅")
+        finally:
+            conn.close()
+        return
+
+    if data == "ta_force_end":
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("Yes", callback_data="ta_force_end_yes"), InlineKeyboardButton("No", callback_data="cancel_action"))
+        bot.send_message(call.message.chat.id, "Are you sure you want to end the task?", reply_markup=markup)
+        return
+
+    if data == "ta_force_end_yes":
+        conn = get_db_connection()
+        auto_end_users = []
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT team_name FROM kbkh_active_assignments WHERE is_started = TRUE")
+            teams = cursor.fetchall()
+            for t in teams:
+                cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s", (t['team_name'],))
+                for u in cursor.fetchall(): 
+                    auto_end_users.append(u['telegram_id'])
+            
+            cursor.execute("DELETE FROM kbkh_active_assignments WHERE is_started = TRUE")
+            conn.commit()
+        finally:
+            conn.close()
+            
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        bot.send_message(call.message.chat.id, "Task Successfully end!✅")
+        
+        for uid in auto_end_users:
+            try: bot.send_message(uid, "Task END!\nThank you dear member♥️")
+            except: pass
+        return
+
+    # 4. Edit Instructions Flow
+    if data == "ei_back":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(InlineKeyboardButton("Task Instructions", callback_data="ei_task"), InlineKeyboardButton("QnA Instructions", callback_data="ei_qna"))
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data == "ei_task":
+        markup = get_task_edit_keyboard(adm_id)
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data == "ei_qna":
+        markup, text = get_qna_inst_keyboard(adm_id)
+        try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data.startswith("mi_sel_"):
+        sel_id = int(data.split("_")[2])
+        admin_state[adm_id]['edit_main'] = sel_id
+        markup, text = get_qna_inst_keyboard(adm_id, sel_id)
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+        return
+
+    if data.startswith("mi_view_"):
+        i_id = int(data.split("_")[2])
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT instruction_text FROM kbkh_custom_instructions WHERE id = %s", (i_id,))
+            inst = cursor.fetchone()
+            
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            markup = InlineKeyboardMarkup(row_width=2).add(InlineKeyboardButton("Yes", callback_data=f"mi_yes_{i_id}"), InlineKeyboardButton("No", callback_data="cancel_action"))
+            bot.send_message(call.message.chat.id, f"{inst['instruction_text']}\n\nWould you like to change anything here?", reply_markup=markup)
+        finally:
+            conn.close()
+        return
+
+    if data.startswith("mi_yes_"):
+        sel_id = int(data.split("_")[2])
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        
+        msg = bot.send_message(call.message.chat.id, f"Input the new message for Instruction {sel_id}:", reply_markup=get_inline_cancel())
+        admin_state[adm_id]['wait_mi'] = sel_id
+        bot.register_next_step_handler(msg, step_update_qna_inst)
+        return
+
+    if data == "mi_click":
+        sel_id = admin_state[adm_id].get('edit_main')
+        if not sel_id: return
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM kbkh_custom_instructions WHERE id = %s", (sel_id,))
+            conn.commit()
+            
+            admin_state[adm_id]['edit_main'] = None
+            markup, text = get_qna_inst_keyboard(adm_id)
+            try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+            except: pass
+        finally:
+            conn.close()
+        return
+
+    if data.startswith("ti_exp_"):
+        t_num = int(data.split("_")[2])
+        current_exp = admin_state[adm_id].get('edit_task_exp')
+        admin_state[adm_id]['edit_task_exp'] = t_num if current_exp != t_num else None
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_task_edit_keyboard(adm_id))
+        except: pass
+        return
+
+    if data.startswith("ti_edit_"):
+        parts = data.split("_")
+        t_num, msg_idx = int(parts[2]), int(parts[3])
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(f"SELECT msg_{msg_idx} FROM kbkh_tasks WHERE task_num = %s", (t_num,))
+            msg_text = cursor.fetchone()[f'msg_{msg_idx}']
+            
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            markup = InlineKeyboardMarkup(row_width=2).add(InlineKeyboardButton("Yes", callback_data=f"ti_yes_{t_num}_{msg_idx}"), InlineKeyboardButton("No", callback_data="cancel_action"))
+            bot.send_message(call.message.chat.id, f"{msg_text}\n\nWould you like to change anything here?", reply_markup=markup)
+        finally:
+            conn.close()
+        return
+
+    if data.startswith("ti_yes_"):
+        parts = data.split("_")
+        t_num, msg_idx = int(parts[2]), int(parts[3])
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        
+        msg = bot.send_message(call.message.chat.id, f"Input the new message for Task -{t_num} ;Message -{msg_idx}:", reply_markup=get_inline_cancel())
+        admin_state[adm_id]['wait_ti'] = {'t_num': t_num, 'msg_idx': msg_idx}
+        bot.register_next_step_handler(msg, step_update_task_msg)
+        return
+
+    if data.startswith("ti_del_sel_"):
+        t_num = int(data.split("_")[3])
+        admin_state[adm_id]['del_task'] = t_num
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_task_edit_keyboard(adm_id, t_num))
+        except: pass
+        return
+
+    if data == "ti_del_sub":
+        t_num = admin_state[adm_id].get('del_task')
+        if not t_num: return bot.send_message(call.message.chat.id, "Select one to delete!")
+        
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("DELETE FROM kbkh_tasks WHERE task_num = %s", (t_num,))
+            
+            cursor.execute("SELECT id, sequence FROM kbkh_organized_tasks")
+            orgs = cursor.fetchall()
+            for org in orgs:
+                if str(t_num) in org['sequence'].split(','):
+                    cursor.execute("DELETE FROM kbkh_organized_tasks WHERE id = %s", (org['id'],))
+                    
+            conn.commit()
+            
+            admin_state[adm_id]['del_task'] = None
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_task_edit_keyboard(adm_id))
+            except: pass
+            
+            bot.answer_callback_query(call.id, "Task Deleted Successfully!", show_alert=True)
+        finally:
+            conn.close()
+        return
 
 # ==========================================
 # 🟢 GENERAL TASK HANDLERS (Assignments & Processing)
@@ -1014,7 +1374,8 @@ def handle_general_content(message):
         except:
             pass
             
-        bot.send_message(message.chat.id, "Please submit your answer:", reply_markup=markup)
+        a_msg = bot.send_message(message.chat.id, "Please submit your answer:", reply_markup=markup)
+        user_state[tg_id]['a_msg_id'] = a_msg.message_id
         return
         
     if tg_id in user_state and user_state[tg_id].get('flow') == 'wait_a':
@@ -1023,6 +1384,13 @@ def handle_general_content(message):
         
         user_state[tg_id]['a_dict'] = {'text': caption, 'photo': photo_id}
         user_state[tg_id]['flow'] = 'qna_preview'
+        
+        try:
+            a_msg_id = user_state[tg_id].get('a_msg_id')
+            if a_msg_id:
+                bot.delete_message(message.chat.id, a_msg_id)
+        except:
+            pass
         
         markup = InlineKeyboardMarkup(row_width=2)
         markup.row(InlineKeyboardButton("Submit", callback_data="qna_final_submit"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
@@ -1248,8 +1616,208 @@ def task_flow_callbacks(call):
         bot.send_message(call.message.chat.id, "Task submitted successfully!\nPlease wait for confirmation.")
 
 # ==========================================
-# 👑 ADMIN: TASK REVIEW (FLAT LIST) & LOGIC
+# 👑 MAIN ADMIN: TASK REVIEW / ASSIGN ORGANIZE HELPER
 # ==========================================
+def render_ta_assign_page(chat_id, message_id, adm_id):
+    state = admin_state.get(adm_id, {}).get('assigning', {})
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT * FROM kbkh_organized_tasks ORDER BY id ASC")
+        orgs = cursor.fetchall()
+    finally:
+        conn.close()
+        
+    state['orgs'] = orgs
+    selected_id = state.get('selected')
+    markup = InlineKeyboardMarkup(row_width=1)
+    
+    if not orgs:
+        markup.add(InlineKeyboardButton("(No Tasks Organized)", callback_data="ignore"))
+    else:
+        for org in orgs:
+            icon = "✅" if org['id'] == selected_id else "🔳"
+            seq_display = org['sequence'].replace(',', '  ')
+            markup.add(InlineKeyboardButton(f"Task {seq_display}  {icon}", callback_data=f"ta_asgsel_{org['id']}"))
+            
+    markup.row(InlineKeyboardButton("Submit", callback_data="ta_asgsub"), InlineKeyboardButton("Delete", callback_data="ta_asgdel"))
+    markup.row(InlineKeyboardButton("Back", callback_data="ta_list"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+    
+    if message_id:
+        try:
+            bot.edit_message_text("Task Assign Menu:", chat_id, message_id, reply_markup=markup)
+        except Exception:
+            pass
+    else:
+        bot.send_message(chat_id, "Task Assign Menu:", reply_markup=markup)
+
+def get_task_edit_keyboard(adm_id, sel_del_id=None):
+    markup = InlineKeyboardMarkup()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT task_num, msg_1, msg_2, msg_3 FROM kbkh_tasks ORDER BY task_num")
+        tasks = cursor.fetchall()
+    finally:
+        conn.close()
+        
+    exp = admin_state.get(adm_id, {}).get('edit_task_exp')
+    if not tasks:
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        return markup
+        
+    for t in tasks:
+        t_num = t['task_num']
+        del_icon = "❌" if str(sel_del_id) == str(t_num) else "🔳"
+        row = []
+        if exp == t_num:
+            row.append(InlineKeyboardButton(f"Task - {t_num} 🔻", callback_data=f"ti_exp_{t_num}"))
+        else:
+            row.append(InlineKeyboardButton(f"Task - {t_num} 🔺", callback_data=f"ti_exp_{t_num}"))
+            
+        row.append(InlineKeyboardButton(del_icon, callback_data=f"ti_del_sel_{t_num}"))
+        markup.row(*row)
+        
+        if exp == t_num:
+            btns = []
+            if t['msg_1']: btns.append(InlineKeyboardButton("1", callback_data=f"ti_edit_{t_num}_1"))
+            if t['msg_2']: btns.append(InlineKeyboardButton("2", callback_data=f"ti_edit_{t_num}_2"))
+            if t['msg_3']: btns.append(InlineKeyboardButton("3", callback_data=f"ti_edit_{t_num}_3"))
+            if btns: markup.row(*btns)
+            
+    if sel_del_id:
+        markup.row(InlineKeyboardButton("Submit", callback_data="ti_del_sub"))
+        
+    markup.row(InlineKeyboardButton("Back", callback_data="ei_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+    return markup
+
+def step_org_task(message):
+    seq = message.text.replace(" ", "")
+    tasks = seq.split(',')
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        success, failed = [], []
+        for t in tasks:
+            try:
+                cursor.execute("SELECT id FROM kbkh_tasks WHERE task_num = %s", (int(t),))
+                if cursor.fetchone():
+                    success.append(t)
+                else:
+                    failed.append(t)
+            except:
+                failed.append(t)
+                
+        if success and not failed:
+            cursor.execute("INSERT INTO kbkh_organized_tasks (sequence) VALUES (%s)", (seq,))
+            bot.send_message(message.chat.id, "Task list added successfully✅")
+        else:
+            msg = ""
+            if success: msg += f"Task {','.join(success)} added successfully✅\n"
+            if failed: msg += f"Task {','.join(failed)} doesn't exist❌"
+            bot.send_message(message.chat.id, msg)
+            
+        conn.commit()
+    finally:
+        conn.close()
+
+def step_update_task_msg(message):
+    adm_id = message.from_user.id
+    state = admin_state.get(adm_id, {}).get('wait_ti')
+    if not state:
+        return
+        
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE kbkh_tasks SET msg_{state['msg_idx']} = %s WHERE task_num = %s", (message.text, state['t_num']))
+        conn.commit()
+        bot.send_message(message.chat.id, "Successfully Replaced!✅")
+    finally:
+        conn.close()
+
+def step_add_msg1(message):
+    adm_id = message.from_user.id
+    if adm_id not in admin_state or 't_num' not in admin_state[adm_id]:
+        return
+        
+    admin_state[adm_id]['msg_1'] = message.text
+    admin_state[adm_id]['clean_msgs'].append(message.message_id)
+    next_t = admin_state[adm_id]['t_num']
+    
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"), InlineKeyboardButton("End", callback_data="ta_end_1"))
+    
+    msg = bot.send_message(message.chat.id, f"Give the second message of the Task -{next_t}:", reply_markup=markup)
+    admin_state[adm_id]['clean_msgs'].append(msg.message_id)
+    bot.register_next_step_handler(msg, step_add_msg2)
+
+def step_add_msg2(message):
+    adm_id = message.from_user.id
+    if adm_id not in admin_state or 't_num' not in admin_state[adm_id]:
+        return
+        
+    admin_state[adm_id]['msg_2'] = message.text
+    admin_state[adm_id]['clean_msgs'].append(message.message_id)
+    next_t = admin_state[adm_id]['t_num']
+    
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"), InlineKeyboardButton("End", callback_data="ta_end_2"))
+    
+    msg = bot.send_message(message.chat.id, f"Give the Third message of the Task -{next_t}:", reply_markup=markup)
+    admin_state[adm_id]['clean_msgs'].append(msg.message_id)
+    bot.register_next_step_handler(msg, step_add_msg3)
+
+def step_add_msg3(message):
+    adm_id = message.from_user.id
+    if adm_id not in admin_state:
+        return
+        
+    admin_state[adm_id]['msg_3'] = message.text
+    admin_state[adm_id]['clean_msgs'].append(message.message_id)
+    
+    # Implicitly finalized by the data being present in state
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("Save and End Task", callback_data="ta_end_3"))
+    msg = bot.send_message(message.chat.id, "All messages recorded. Press below to finalize.", reply_markup=markup)
+    admin_state[adm_id]['clean_msgs'].append(msg.message_id)
+
+def get_qna_inst_keyboard(adm_id, sel_id=None):
+    markup = InlineKeyboardMarkup()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT id FROM kbkh_custom_instructions ORDER BY id")
+        insts = cursor.fetchall()
+        if not insts:
+            markup.row(InlineKeyboardButton("Back", callback_data="ei_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+            return markup, "No Instructions Available!"
+            
+        for inst in insts:
+            i_id = inst['id']
+            icon = "❌" if str(i_id) == str(sel_id) else "🔳"
+            markup.row(InlineKeyboardButton(f"Instruction - {i_id}", callback_data=f"mi_view_{i_id}"), InlineKeyboardButton(icon, callback_data=f"mi_sel_{i_id}"))
+            
+        markup.row(InlineKeyboardButton("Submit", callback_data="mi_click"))
+        markup.row(InlineKeyboardButton("Back", callback_data="ei_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        return markup, "QnA Instructions:"
+    finally:
+        conn.close()
+
+def step_update_qna_inst(message):
+    adm_id = message.from_user.id
+    sel_id = admin_state.get(adm_id, {}).get('wait_mi')
+    if not sel_id:
+        return
+        
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE kbkh_custom_instructions SET instruction_text = %s WHERE id = %s", (message.text, sel_id))
+        conn.commit()
+        bot.send_message(message.chat.id, "Successfully Replaced!✅")
+    finally:
+        conn.close()
+
 def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
     status_filter = 'Approved' if is_completed else 'Pending'
     conn = get_db_connection()
@@ -1295,270 +1863,6 @@ def render_admin_submission_list(chat_id, message_id=None, is_completed=False):
             bot.send_message(chat_id, text, reply_markup=markup)
     finally:
         conn.close()
-
-@bot.callback_query_handler(func=lambda call: call.data in ["adm_tsub", "adm_tcomp", "adm_back"] or call.data.startswith("grd_") or call.data.startswith("gact_") or call.data.startswith("gfbk_") or call.data.startswith("gsub_") or call.data == "ignore" or call.data.startswith("ta_end_"))
-def admin_grading_actions(call):
-    adm_id = call.from_user.id
-    try:
-        bot.answer_callback_query(call.id)
-    except:
-        pass
-        
-    if call.data == "ignore":
-        return
-        
-    if call.data.startswith("ta_end_"):
-        bot.clear_step_handler_by_chat_id(call.message.chat.id)
-        if adm_id in admin_state and 'clean_msgs' in admin_state[adm_id]: 
-            admin_state[adm_id]['clean_msgs'].append(call.message.message_id)
-        
-        state = admin_state.get(adm_id, {})
-        t_num = state.get('t_num')
-        if not t_num: return
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO kbkh_tasks (task_num, msg_1, msg_2, msg_3) VALUES (%s, %s, %s, %s) ON CONFLICT (task_num) DO UPDATE SET msg_1=EXCLUDED.msg_1, msg_2=EXCLUDED.msg_2, msg_3=EXCLUDED.msg_3", 
-                           (t_num, state.get('msg_1'), state.get('msg_2'), state.get('msg_3')))
-            conn.commit()
-            for m_id in state.get('clean_msgs', []):
-                try: bot.delete_message(call.message.chat.id, m_id)
-                except: pass
-            admin_state[adm_id].pop('t_num', None)
-            admin_state[adm_id].pop('clean_msgs', None)
-            bot.send_message(call.message.chat.id, f"All your messages for Task-{t_num} have been successfully added!✅")
-        finally:
-            conn.close()
-        return
-    
-    if call.data == "adm_back":
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(InlineKeyboardButton("Task Submitted", callback_data="adm_tsub"), InlineKeyboardButton("Task Completed", callback_data="adm_tcomp"))
-        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        try:
-            bot.edit_message_text("Task Menu:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except:
-            pass
-        
-    elif call.data in ["adm_tsub", "adm_tcomp"]:
-        is_completed = (call.data == "adm_tcomp")
-        if adm_id not in admin_state:
-            admin_state[adm_id] = {}
-        render_admin_submission_list(call.message.chat.id, call.message.message_id, is_completed)
-        
-    elif call.data.startswith("grd_"):
-        sub_id = int(call.data.split("_")[1])
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
-            sub = cursor.fetchone()
-            
-            if not sub:
-                return
-            
-            if adm_id not in admin_state:
-                admin_state[adm_id] = {}
-                
-            admin_state[adm_id]['grading_sub'] = sub_id
-            admin_state[adm_id]['action'] = None
-            
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except:
-                pass
-            
-            try:
-                items = json.loads(sub['content_text'])
-                for item in items:
-                    if item.get('photo'):
-                        bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
-                    else:
-                        bot.send_message(call.message.chat.id, item.get('text', ''))
-            except:
-                if sub['photo_id']:
-                    bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
-                else:
-                    bot.send_message(call.message.chat.id, sub['content_text'])
-                
-            info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}"
-            markup = get_admin_grading_kb(sub_id)
-            bot.send_message(call.message.chat.id, info_text, reply_markup=markup)
-        finally:
-            conn.close()
-        
-    elif call.data.startswith("gact_"):
-        parts = call.data.split("_")
-        sub_id = int(parts[1])
-        act = parts[2]
-        
-        if adm_id not in admin_state:
-            admin_state[adm_id] = {}
-            
-        admin_state[adm_id]['action'] = act
-        try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_admin_grading_kb(sub_id, act))
-        except:
-            pass
-        
-    elif call.data.startswith("gfbk_"):
-        sub_id = int(call.data.split("_")[1])
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            pass
-            
-        markup = get_inline_cancel()
-        msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=markup)
-        bot.register_next_step_handler(msg_box, process_admin_feedback, sub_id)
-        
-    elif call.data.startswith("gsub_"):
-        sub_id = int(call.data.split("_")[1])
-        act = admin_state.get(adm_id, {}).get('action')
-        feedback = admin_state.get(adm_id, {}).get('feedback')
-        
-        if not act:
-            return bot.answer_callback_query(call.id, "Select Approve or Reject!", show_alert=True)
-            
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            pass
-            
-        finalize_grading(sub_id, act, feedback, adm_id, call.message.chat.id)
-
-def get_admin_grading_kb(sub_id, action=None):
-    markup = InlineKeyboardMarkup(row_width=2)
-    ap_btn = "Approve✅" if action == "approve" else "Approve"
-    rj_btn = "Reject✅" if action == "reject" else "Reject"
-    markup.row(InlineKeyboardButton(ap_btn, callback_data=f"gact_{sub_id}_approve"), InlineKeyboardButton(rj_btn, callback_data=f"gact_{sub_id}_reject"))
-    markup.add(InlineKeyboardButton("- Feedback -", callback_data=f"gfbk_{sub_id}"))
-    markup.row(InlineKeyboardButton("Submit", callback_data=f"gsub_{sub_id}"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-    return markup
-
-def process_admin_feedback(message, sub_id):
-    adm_id = message.from_user.id
-    if adm_id not in admin_state:
-        admin_state[adm_id] = {}
-        
-    admin_state[adm_id]['feedback'] = message.text
-    
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
-        sub = cursor.fetchone()
-        
-        info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}\n◀️Feedback: {message.text}"
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(InlineKeyboardButton("Send", callback_data=f"gsub_{sub_id}"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        bot.send_message(message.chat.id, info_text, reply_markup=markup)
-    finally:
-        conn.close()
-
-def finalize_grading(sub_id, status_act, feedback, adm_id, chat_id):
-    # Isolated state clear for specific admin
-    if adm_id in admin_state:
-        admin_state[adm_id].pop('feedback', None) 
-        admin_state[adm_id].pop('action', None)
-        
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
-        sub = cursor.fetchone()
-        
-        try:
-            items = json.loads(sub['content_text'])
-            cap = "\n\n".join([i['text'] for i in items])
-        except Exception:
-            cap = sub['content_text']
-
-        if status_act == "approve":
-            cursor.execute("UPDATE kbkh_submissions SET status = 'Approved' WHERE id = %s", (sub_id,))
-            
-            if feedback:
-                user_msg = f"{cap}\n\n🔺Task Status: Complete✅\n\n◀️Feedback: {feedback}"
-                if sub['photo_id']:
-                    bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=user_msg)
-                else:
-                    bot.send_message(sub['telegram_id'], user_msg)
-            else:
-                bot.send_message(sub['telegram_id'], "Your task has been successfully reviewed and marked as completed!✅")
-                
-            if sub['task_num'] == 3:
-                fwd_cap = f"{cap}\nName: {sub['fb_name']}"
-                try:
-                    if sub['photo_id']:
-                        bot.send_photo(PRIVATE_GROUP_ID, sub['photo_id'], caption=fwd_cap)
-                    else:
-                        bot.send_message(PRIVATE_GROUP_ID, fwd_cap)
-                except Exception as e:
-                    print("Forward Error:", e)
-        else:
-            cursor.execute("DELETE FROM kbkh_submissions WHERE id = %s", (sub_id,))
-            cursor.execute("UPDATE kbkh_user_task_status SET completed = FALSE WHERE telegram_id = %s AND task_num = %s", (sub['telegram_id'], sub['task_num']))
-            
-            user_msg = f"{cap[:50]}...\nTask Status: Failed❌\n"
-            if feedback:
-                user_msg += f"◀️Feedback: {feedback}"
-            else:
-                user_msg += "Please try again. If the issue persists, contact a senior team member for assistance."
-                
-            if sub['photo_id']:
-                bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=user_msg)
-            else:
-                bot.send_message(sub['telegram_id'], user_msg)
-        
-        conn.commit()
-        render_admin_submission_list(chat_id, None, False)
-        
-        # Realtime Auto-End Check
-        if status_act == "approve":
-            cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (sub['team_name'],))
-            total_m = cursor.fetchone()['count']
-            
-            cursor.execute("""
-                SELECT COUNT(DISTINCT s.telegram_id) FROM kbkh_submissions s
-                JOIN members m ON s.telegram_id = m.telegram_id
-                WHERE m.team_name = %s AND s.task_num = %s AND s.status = 'Approved'
-            """, (sub['team_name'], sub['task_num']))
-            done_m = cursor.fetchone()['count']
-            
-            if total_m > 0 and done_m >= total_m:
-                cursor.execute("DELETE FROM kbkh_active_assignments WHERE team_name = %s AND task_num = %s", (sub['team_name'], sub['task_num']))
-                cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (sub['team_name'],))
-                
-                users_to_notify = cursor.fetchall()
-                conn.commit()
-                
-                for u in users_to_notify:
-                    try:
-                        bot.send_message(u['telegram_id'], "Task END!\nThank you dear member♥️")
-                    except:
-                        pass
-                        
-    finally:
-        conn.close()
-
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_action")
-def simple_cancel(call):
-    tg_id = call.from_user.id
-    user_state.pop(tg_id, None)
-    
-    if tg_id in admin_state:
-        admin_state[tg_id].pop('feedback', None) 
-        admin_state[tg_id].pop('action', None)
-        
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
-        
-    try:
-        bot.clear_step_handler_by_chat_id(call.message.chat.id)
-    except:
-        pass
 
 # ==========================================
 # ⏰ BACKGROUND AUTO-TIMER
@@ -1654,29 +1958,24 @@ def coming_soon(message):
     bot.send_message(message.chat.id, "⏳ This feature is Coming Soon!")
 
 if __name__ == "__main__":
-    # Start Flask Server for UptimeRobot
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Start the Auto-Timer for Tasks
     timer_thread = threading.Thread(target=auto_task_timer)
     timer_thread.daemon = True
     timer_thread.start()
     
     print("🤖 KBKh Task Bot is Fast, Secure, and Fully Restored...")
     
-    # 409 Conflict & Hang Prevention Block
     try:
-        # Forcefully detach any ghost webhooks before polling
-        bot.remove_webhook(drop_pending_updates=True)
+        bot.remove_webhook()
         time.sleep(1)
     except:
         pass
 
     while True:
         try:
-            # Start Polling with strict timeouts
             bot.infinity_polling(timeout=30, long_polling_timeout=30)
         except Exception as e:
             print(f"Polling Error: {e}")
