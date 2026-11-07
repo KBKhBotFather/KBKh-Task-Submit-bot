@@ -351,7 +351,7 @@ def handle_task_routing(message):
         conn.close()
 
 # ==========================================
-# 🟢 ADMIN ONLY MENUS (Fixed Handlers)
+# 🟢 ADMIN ONLY MENUS
 # ==========================================
 @bot.message_handler(func=lambda msg: msg.text in ["Task Assign", "Triggered Task", "Reset Task Data", "Edit Instructions"])
 def admin_management_buttons(message):
@@ -862,30 +862,48 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT telegram_id, mod_name, team_name, total_assigned FROM kbkh_qna_moderators WHERE is_active = TRUE")
+        # Fetching all mods including blocked ones for UI toggle
+        cursor.execute("SELECT telegram_id, mod_name, team_name, total_assigned, is_blocked FROM kbkh_qna_moderators WHERE is_active = TRUE")
         mods = cursor.fetchall()
         
-        # Design fix: row_width=3 to give name button more space
-        markup = InlineKeyboardMarkup(row_width=3)
+        # Design fix: row_width=6 to give Name huge space (span 4), and Block/Kick small space (span 1)
+        markup = InlineKeyboardMarkup(row_width=6)
         
-        markup.add(InlineKeyboardButton("QnA Making Team 🔻", callback_data="amod_qna"))
+        exp_team = admin_state.get(adm_id, {}).get('admin_mod_exp')
+        target_mod = admin_state.get(adm_id, {}).get('mod_target')
         
-        teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': []}
-        for m in mods:
-            if m['team_name'] in teams:
-                teams[m['team_name']].append(m)
-        
-        for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
-            if teams[t]:
-                markup.add(InlineKeyboardButton(f"--{t}--", callback_data="ignore"))
-                for m in teams[t]:
-                    # Create 3 buttons in one row for better UI
-                    btn_name = InlineKeyboardButton(f"{m['mod_name']} - {m['total_assigned']}", callback_data="ignore")
-                    btn_blk = InlineKeyboardButton("⛔", callback_data=f"amodblk_{m['telegram_id']}")
-                    btn_kck = InlineKeyboardButton("❌", callback_data=f"amodkck_{m['telegram_id']}")
-                    markup.row(btn_name, btn_blk, btn_kck)
-                    
-        markup.add(InlineKeyboardButton("Submit", callback_data="amod_sub"))
+        if exp_team == 'qna':
+            markup.add(InlineKeyboardButton("QnA Making Team 🔻", callback_data="amod_qna"))
+            teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': []}
+            for m in mods:
+                if m['team_name'] in teams:
+                    teams[m['team_name']].append(m)
+            
+            for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
+                if teams[t]:
+                    markup.add(InlineKeyboardButton(f"--{t}--", callback_data="ignore"))
+                    for m in teams[t]:
+                        # Dynamic icons based on status and selection
+                        blk_icon = "⛔🔒" if m['is_blocked'] else "⛔"
+                        kck_icon = "❌"
+                        
+                        if target_mod and target_mod['id'] == m['telegram_id']:
+                            if target_mod['action'] == 'block':
+                                blk_icon = "⛔🔓" if m['is_blocked'] else "⛔⛔🔒"
+                            elif target_mod['action'] == 'kick':
+                                kck_icon = "❌✅"
+                                
+                        btn_name = InlineKeyboardButton(f"{m['mod_name']} - {m['total_assigned']}", callback_data="ignore")
+                        btn_blk = InlineKeyboardButton(blk_icon, callback_data=f"amodblk_{m['telegram_id']}")
+                        btn_kck = InlineKeyboardButton(kck_icon, callback_data=f"amodkck_{m['telegram_id']}")
+                        
+                        # Creating a custom row to force proportions
+                        markup.row(btn_name, btn_name, btn_name, btn_name, btn_blk, btn_kck)
+                        
+            markup.add(InlineKeyboardButton("Submit", callback_data="amod_sub"))
+        else:
+            markup.add(InlineKeyboardButton("QnA Making Team 🔺", callback_data="amod_qna"))
+            
         markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
@@ -899,9 +917,9 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
         conn.close()
 
 # ==========================================
-# ⚙️ ADMIN ACTIONS HANDLER
+# ⚙️ ADMIN ACTIONS HANDLER (Fixed Cancel & Task Routing)
 # ==========================================
-@bot.callback_query_handler(func=lambda call: call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_") or call.data.startswith("ta_") or call.data.startswith("ei_") or call.data.startswith("ti_") or call.data.startswith("mi_") or call.data == "reset_task_yes")
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_action" or call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_") or call.data.startswith("ta_") or call.data.startswith("ei_") or call.data.startswith("ti_") or call.data.startswith("mi_") or call.data == "reset_task_yes" or call.data.startswith("adm_") or call.data.startswith("grd_") or call.data.startswith("gact_") or call.data.startswith("gfbk_") or call.data.startswith("gsub_"))
 def central_admin_actions(call):
     adm_id = call.from_user.id
     if str(adm_id) != ADMIN_CHAT_ID:
@@ -916,27 +934,36 @@ def central_admin_actions(call):
     if adm_id not in admin_state:
         admin_state[adm_id] = {}
 
-    # 1. Moderators Panel Actions
+    # 1. CANCEL ACTION
+    if data == "cancel_action":
+        admin_state.pop(adm_id, None)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        try:
+            bot.clear_step_handler_by_chat_id(call.message.chat.id)
+        except:
+            pass
+        return
+
+    # 2. Moderators Panel Actions
     if data == "amod_qna":
+        curr = admin_state[adm_id].get('admin_mod_exp')
+        admin_state[adm_id]['admin_mod_exp'] = None if curr == 'qna' else 'qna'
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data.startswith("amodblk_"):
         tg = int(data.split("_")[1])
         admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'block'}
-        try:
-            bot.answer_callback_query(call.id, "Block selected. Press Submit.", show_alert=True)
-        except:
-            pass
+        render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data.startswith("amodkck_"):
         tg = int(data.split("_")[1])
         admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'kick'}
-        try:
-            bot.answer_callback_query(call.id, "Cross selected. Press Submit.", show_alert=True)
-        except:
-            pass
+        render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data == "amod_sub":
@@ -948,7 +975,19 @@ def central_admin_actions(call):
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             if target['action'] == 'block':
-                cursor.execute("UPDATE kbkh_qna_moderators SET is_blocked = TRUE WHERE telegram_id = %s", (target['id'],))
+                cursor.execute("SELECT is_blocked FROM kbkh_qna_moderators WHERE telegram_id = %s", (target['id'],))
+                mod = cursor.fetchone()
+                if mod:
+                    new_status = not mod['is_blocked']
+                    cursor.execute("UPDATE kbkh_qna_moderators SET is_blocked = %s WHERE telegram_id = %s", (new_status, target['id']))
+                    try:
+                        if new_status:
+                            bot.send_message(target['id'], "Access Blocked⛔", reply_markup=ReplyKeyboardRemove())
+                        else:
+                            bot.send_message(target['id'], "Welcome Sir❤️\nYou are back in QnA Marking Team!", reply_markup=qna_marking_menu())
+                    except Exception:
+                        pass
+                        
             elif target['action'] == 'kick':
                 cursor.execute("UPDATE kbkh_qna_moderators SET is_active = FALSE, resign_count = resign_count + 1 WHERE telegram_id = %s", (target['id'],))
                 
@@ -962,7 +1001,7 @@ def central_admin_actions(call):
                         cursor.execute("UPDATE kbkh_qna_moderators SET total_assigned = total_assigned + 1 WHERE telegram_id = %s", (new_mod,))
                         
                 try:
-                    bot.send_message(target['id'], "You are not registered!❌", reply_markup=ReplyKeyboardRemove())
+                    bot.send_message(target['id'], "You are not REGISTERED❌", reply_markup=ReplyKeyboardRemove())
                 except Exception:
                     pass
                     
@@ -980,7 +1019,7 @@ def central_admin_actions(call):
         admin_state[adm_id].pop('mod_target', None)
         return
 
-    # 2. Reset Data Action
+    # 3. Reset Data Action
     if data == "reset_task_yes":
         conn = get_db_connection()
         try:
@@ -1003,8 +1042,102 @@ def central_admin_actions(call):
         finally:
             conn.close()
         return
+        
+    # 4. ADMIN TASK REVIEW (Task Submitted / Completed)
+    if data == "adm_back":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.row(InlineKeyboardButton("Task Submitted", callback_data="adm_tsub"), InlineKeyboardButton("Task Completed", callback_data="adm_tcomp"))
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        try:
+            bot.edit_message_text("Task Menu:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except Exception:
+            pass
+        return
+        
+    elif data in ["adm_tsub", "adm_tcomp"]:
+        is_completed = (data == "adm_tcomp")
+        render_admin_submission_list(call.message.chat.id, call.message.message_id, is_completed)
+        return
+        
+    elif data.startswith("grd_"):
+        sub_id = int(data.split("_")[1])
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT s.*, m.fb_name, m.team_name FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.id = %s", (sub_id,))
+            sub = cursor.fetchone()
+            
+            if not sub:
+                return
+                
+            admin_state[adm_id]['grading_sub'] = sub_id
+            admin_state[adm_id]['action'] = None
+            
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except:
+                pass
+            
+            try:
+                items = json.loads(sub['content_text'])
+                for item in items:
+                    if item.get('photo'):
+                        bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
+                    else:
+                        bot.send_message(call.message.chat.id, item.get('text', ''))
+            except:
+                if sub['photo_id']:
+                    bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
+                else:
+                    bot.send_message(call.message.chat.id, sub['content_text'])
+                
+            info_text = f"Name: {sub['fb_name']}\nTeam: {sub['team_name']}"
+            markup = get_admin_grading_kb(sub_id)
+            bot.send_message(call.message.chat.id, info_text, reply_markup=markup)
+        finally:
+            conn.close()
+        return
+        
+    elif data.startswith("gact_"):
+        parts = data.split("_")
+        sub_id = int(parts[1])
+        act = parts[2]
+        admin_state[adm_id]['action'] = act
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_admin_grading_kb(sub_id, act))
+        except:
+            pass
+        return
+        
+    elif data.startswith("gfbk_"):
+        sub_id = int(data.split("_")[1])
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+            
+        markup = get_inline_cancel()
+        msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=markup)
+        bot.register_next_step_handler(msg_box, process_admin_feedback, sub_id)
+        return
+        
+    elif data.startswith("gsub_"):
+        sub_id = int(data.split("_")[1])
+        act = admin_state.get(adm_id, {}).get('action')
+        feedback = admin_state.get(adm_id, {}).get('feedback')
+        
+        if not act:
+            return bot.answer_callback_query(call.id, "Select Approve or Reject!", show_alert=True)
+            
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+            
+        finalize_grading(sub_id, act, feedback, adm_id, call.message.chat.id)
+        return
 
-    # 3. Task Assign & Organize Flow
+    # 5. Task Assign & Organize Flow
     if data == "ta_main":
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(InlineKeyboardButton("Add Task", callback_data="ta_add"), InlineKeyboardButton("Task List", callback_data="ta_list"))
@@ -1196,7 +1329,7 @@ def central_admin_actions(call):
             except: pass
         return
 
-    # 4. Edit Instructions Flow
+    # 6. Edit Instructions Flow
     if data == "ei_back":
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(InlineKeyboardButton("Task Instructions", callback_data="ei_task"), InlineKeyboardButton("QnA Instructions", callback_data="ei_qna"))
@@ -1435,7 +1568,7 @@ def handle_general_content(message):
     elif active_task == 2 and message.content_type == 'photo':
         caption = message.caption
         if not caption:
-            bot.send_message(message.chat.id, "ছবি এর সাথে ক্যাপশন হিসাবে আপনার তৈরি করা প্রশ্নটি যুক্ত করতে হবে। অন্যথায় গ্রহণযোগ্য হবে না।❌")
+            bot.send_message(message.chat.id, "ছবি এর সাথে ক্যাপশন হিসাবে আপনার তৈরি করা প্রশ্নটি যুক্ত করতে হবে। অন্যথায় গ্রহণযোগ্য হবে অ্যাকশন।❌")
             return
         check_and_process_task_question(message, caption, is_photo=True, photo_id=message.photo[-1].file_id)
         
@@ -1616,7 +1749,7 @@ def task_flow_callbacks(call):
         bot.send_message(call.message.chat.id, "Task submitted successfully!\nPlease wait for confirmation.")
 
 # ==========================================
-# 👑 MAIN ADMIN: TASK REVIEW / ASSIGN ORGANIZE HELPER
+# 👑 ADMIN: TASK REVIEW / ASSIGN ORGANIZE HELPER
 # ==========================================
 def render_ta_assign_page(chat_id, message_id, adm_id):
     state = admin_state.get(adm_id, {}).get('assigning', {})
@@ -1776,7 +1909,6 @@ def step_add_msg3(message):
     admin_state[adm_id]['msg_3'] = message.text
     admin_state[adm_id]['clean_msgs'].append(message.message_id)
     
-    # Implicitly finalized by the data being present in state
     markup = InlineKeyboardMarkup().add(InlineKeyboardButton("Save and End Task", callback_data="ta_end_3"))
     msg = bot.send_message(message.chat.id, "All messages recorded. Press below to finalize.", reply_markup=markup)
     admin_state[adm_id]['clean_msgs'].append(msg.message_id)
