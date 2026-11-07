@@ -99,7 +99,7 @@ def init_db():
             2: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!",
             3: "উত্তরের মান উন্নত করা প্রয়োজন!", 
             4: "মোটামুটি ভালো হয়েছে। আরও ভালো করার চেষ্টা করতে হবে।",
-            5: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে হবে।", 
+            5: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে ক্ষমতায় থাকতে হবে।", 
             6: "উত্তরের মান বেশ ভালো। অবস্থান ধরে রাখতে হবে।"
         }
         for k, v in default_inst.items():
@@ -852,22 +852,14 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
 # ==========================================
 # 👑 MAIN ADMIN: MODERATORS PANEL
 # ==========================================
-@bot.message_handler(func=lambda msg: msg.text == "Moderators")
-def admin_moderators_panel(message):
-    if str(message.from_user.id) != ADMIN_CHAT_ID:
-        return
-    render_main_admin_mods(message.chat.id, message.from_user.id, None)
-
 def render_main_admin_mods(chat_id, adm_id, message_id):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        # Fetching all mods including blocked ones for UI toggle
         cursor.execute("SELECT telegram_id, mod_name, team_name, total_assigned, is_blocked FROM kbkh_qna_moderators WHERE is_active = TRUE")
         mods = cursor.fetchall()
         
-        # Design fix: row_width=6 to give Name huge space (span 4), and Block/Kick small space (span 1)
-        markup = InlineKeyboardMarkup(row_width=6)
+        markup = InlineKeyboardMarkup(row_width=3)
         
         exp_team = admin_state.get(adm_id, {}).get('admin_mod_exp')
         target_mod = admin_state.get(adm_id, {}).get('mod_target')
@@ -883,13 +875,12 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
                 if teams[t]:
                     markup.add(InlineKeyboardButton(f"--{t}--", callback_data="ignore"))
                     for m in teams[t]:
-                        # Dynamic icons based on status and selection
                         blk_icon = "⛔🔒" if m['is_blocked'] else "⛔"
                         kck_icon = "❌"
                         
                         if target_mod and target_mod['id'] == m['telegram_id']:
                             if target_mod['action'] == 'block':
-                                blk_icon = "⛔🔓" if m['is_blocked'] else "⛔⛔🔒"
+                                blk_icon = "⛔" if m['is_blocked'] else "⛔🔒"
                             elif target_mod['action'] == 'kick':
                                 kck_icon = "❌✅"
                                 
@@ -897,8 +888,7 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
                         btn_blk = InlineKeyboardButton(blk_icon, callback_data=f"amodblk_{m['telegram_id']}")
                         btn_kck = InlineKeyboardButton(kck_icon, callback_data=f"amodkck_{m['telegram_id']}")
                         
-                        # Creating a custom row to force proportions
-                        markup.row(btn_name, btn_name, btn_name, btn_name, btn_blk, btn_kck)
+                        markup.row(btn_name, btn_blk, btn_kck)
                         
             markup.add(InlineKeyboardButton("Submit", callback_data="amod_sub"))
         else:
@@ -916,10 +906,39 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
     finally:
         conn.close()
 
+@bot.message_handler(func=lambda msg: msg.text == "Moderators")
+def admin_moderators_panel(message):
+    if str(message.from_user.id) != ADMIN_CHAT_ID:
+        return
+    render_main_admin_mods(message.chat.id, message.from_user.id, None)
+
 # ==========================================
 # ⚙️ ADMIN ACTIONS HANDLER (Fixed Cancel & Task Routing)
 # ==========================================
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_action" or call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_") or call.data.startswith("ta_") or call.data.startswith("ei_") or call.data.startswith("ti_") or call.data.startswith("mi_") or call.data == "reset_task_yes" or call.data.startswith("adm_") or call.data.startswith("grd_") or call.data.startswith("gact_") or call.data.startswith("gfbk_") or call.data.startswith("gsub_"))
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_action")
+def universal_cancel_action(call):
+    user_id = call.from_user.id
+    try:
+        bot.answer_callback_query(call.id)
+    except:
+        pass
+        
+    if user_id in admin_state:
+        admin_state.pop(user_id, None)
+    if user_id in user_state:
+        user_state.pop(user_id, None)
+        
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    try:
+        bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    except:
+        pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("amod_") or call.data.startswith("amodblk_") or call.data.startswith("amodkck_") or call.data.startswith("ta_") or call.data.startswith("ei_") or call.data.startswith("ti_") or call.data.startswith("mi_") or call.data == "reset_task_yes" or call.data.startswith("adm_") or call.data.startswith("grd_") or call.data.startswith("gact_") or call.data.startswith("gfbk_") or call.data.startswith("gsub_"))
 def central_admin_actions(call):
     adm_id = call.from_user.id
     if str(adm_id) != ADMIN_CHAT_ID:
@@ -934,19 +953,6 @@ def central_admin_actions(call):
     if adm_id not in admin_state:
         admin_state[adm_id] = {}
 
-    # 1. CANCEL ACTION
-    if data == "cancel_action":
-        admin_state.pop(adm_id, None)
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            pass
-        try:
-            bot.clear_step_handler_by_chat_id(call.message.chat.id)
-        except:
-            pass
-        return
-
     # 2. Moderators Panel Actions
     if data == "amod_qna":
         curr = admin_state[adm_id].get('admin_mod_exp')
@@ -956,13 +962,21 @@ def central_admin_actions(call):
         
     elif data.startswith("amodblk_"):
         tg = int(data.split("_")[1])
-        admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'block'}
+        curr = admin_state[adm_id].get('mod_target')
+        if curr and curr['id'] == tg and curr['action'] == 'block':
+            admin_state[adm_id]['mod_target'] = None
+        else:
+            admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'block'}
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data.startswith("amodkck_"):
         tg = int(data.split("_")[1])
-        admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'kick'}
+        curr = admin_state[adm_id].get('mod_target')
+        if curr and curr['id'] == tg and curr['action'] == 'kick':
+            admin_state[adm_id]['mod_target'] = None
+        else:
+            admin_state[adm_id]['mod_target'] = {'id': tg, 'action': 'kick'}
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
@@ -1024,7 +1038,6 @@ def central_admin_actions(call):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # Only user submitted data is deleted. Tasks and Instructions remain intact.
             cursor.execute("DELETE FROM kbkh_user_task_status;")
             cursor.execute("DELETE FROM kbkh_active_assignments;")
             cursor.execute("DELETE FROM kbkh_submissions;")
