@@ -371,7 +371,7 @@ def admin_management_buttons(message):
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT a.team_name, a.task_num, a.is_started 
+                SELECT a.team_name, a.task_num, a.is_started, a.scheduled_for 
                 FROM kbkh_active_assignments a
                 WHERE EXISTS (SELECT 1 FROM members m WHERE m.team_name = a.team_name)
                 ORDER BY a.id ASC
@@ -382,8 +382,52 @@ def admin_management_buttons(message):
                 bot.send_message(message.chat.id, "No Task Triggered!")
             else:
                 is_st = any(a['is_started'] for a in assigns)
-                msg_text = "".join([f"{a['team_name']} - Task {a['task_num']}\n" for a in assigns])
-                msg_text += f"\nTask Status: {'Started!🟢' if is_st else 'Not Assigned yet!🔴'}"
+                
+                display_teams = []
+                task_start = None
+                duration_hours = 24
+                
+                for a in assigns:
+                    if task_start is None or a['scheduled_for'] < task_start:
+                        task_start = a['scheduled_for']
+                        
+                    team = a['team_name']
+                    t_num = a['task_num']
+                    
+                    cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
+                    total_members = cursor.fetchone()['count']
+                    
+                    cursor.execute("SELECT COUNT(DISTINCT s.telegram_id) FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE m.team_name = %s AND s.task_num = %s AND s.status = 'Approved'", (team, t_num))
+                    done_members = cursor.fetchone()['count']
+                    
+                    if total_members > 0 and done_members < total_members:
+                        display_teams.append(f"{team} - [Task-{t_num}]")
+                        
+                    cursor.execute("SELECT msg_2, msg_3 FROM kbkh_tasks WHERE task_num = %s", (t_num,))
+                    t_msgs_check = cursor.fetchone()
+                    if t_msgs_check:
+                        if t_msgs_check['msg_3']:
+                            duration_hours = max(duration_hours, 72)
+                        elif t_msgs_check['msg_2']:
+                            duration_hours = max(duration_hours, 48)
+                            
+                if not display_teams:
+                    msg_text = "All teams have successfully completed their tasks! 🟢\nWaiting for background auto-end..."
+                else:
+                    msg_text = "\n".join(display_teams)
+                    msg_text += f"\n\nTask Status: {'Started!🟢' if is_st else 'Not Assigned yet!🔴'}"
+                    
+                    if task_start:
+                        end_date = task_start + timedelta(hours=duration_hours)
+                        
+                        def fmt_dt(dt):
+                            hour = dt.hour % 12
+                            if hour == 0: hour = 12
+                            ampm = "A.M" if dt.hour < 12 else "P.M"
+                            return f"{dt.day}{dt.strftime('%B')} - {hour:02d}:{dt.strftime('%M')} {ampm}"
+                            
+                        msg_text += f"\nTask Start Date: {fmt_dt(task_start)}"
+                        msg_text += f"\nTask End Date: {fmt_dt(end_date)}"
                 
                 markup = InlineKeyboardMarkup(row_width=2)
                 if not is_st:
@@ -1287,7 +1331,7 @@ def central_admin_actions(call):
         
         tasks = seq_str.split(',')
         teams = ['Team Alpha', 'Team Beta', 'Team Gamma']
-        next_midnight = datetime.combine(get_bd_time().date() + timedelta(days=1), datetime.min.time())
+        next_midnight = (get_bd_time() + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
         
         conn = get_db_connection()
         try:
@@ -2153,7 +2197,13 @@ def auto_task_timer():
                 assignments = cursor.fetchall()
                 now = get_bd_time()
                 
+                all_teams_finished = True
+                any_active = False
+                force_end = False
+                msg_updates = []
+                
                 for assign in assignments:
+                    any_active = True
                     team = assign['team_name']
                     t_num = assign['task_num']
                     msg_lvl = assign['current_msg']
@@ -2169,30 +2219,32 @@ def auto_task_timer():
                             cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
                             users = [u['telegram_id'] for u in cursor.fetchall()]
                             actions_to_take.append({'users': users, 'msg': task_msgs['msg_1']})
+                        all_teams_finished = False
                         continue
                     
                     if not is_st:
+                        all_teams_finished = False
                         continue 
-                    
-                    cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
-                    total_members = cursor.fetchone()['count']
-                    
-                    cursor.execute("SELECT COUNT(DISTINCT telegram_id) FROM kbkh_submissions WHERE team_name = %s AND task_num = %s AND status = 'Approved'", (team, t_num))
-                    done_members = cursor.fetchone()['count']
                     
                     diff_hours = (now - sched).total_seconds() / 3600
                     
-                    if (total_members > 0 and done_members >= total_members) or (diff_hours >= 72):
-                        cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
-                        users = [u['telegram_id'] for u in cursor.fetchall()]
-                        actions_to_take.append({'users': users, 'msg': "Task END!\nThank you dear member♥️"})
-                        
-                        cursor.execute("DELETE FROM kbkh_active_assignments WHERE id = %s", (assign['id'],))
-                        continue
-
                     cursor.execute("SELECT msg_2, msg_3 FROM kbkh_tasks WHERE task_num = %s", (t_num,))
                     t_msgs = cursor.fetchone()
+                    max_dur = 72 if t_msgs and t_msgs['msg_3'] else (48 if t_msgs and t_msgs['msg_2'] else 24)
                     
+                    if diff_hours >= max_dur:
+                        force_end = True
+                        break
+                        
+                    cursor.execute("SELECT COUNT(*) FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
+                    total_members = cursor.fetchone()['count']
+                    
+                    cursor.execute("SELECT COUNT(DISTINCT s.telegram_id) FROM kbkh_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE m.team_name = %s AND s.task_num = %s AND s.status = 'Approved'", (team, t_num))
+                    done_members = cursor.fetchone()['count']
+                    
+                    if total_members == 0 or done_members < total_members:
+                        all_teams_finished = False
+
                     cursor.execute("""
                         SELECT m.telegram_id FROM members m 
                         LEFT JOIN kbkh_user_task_status uts ON m.telegram_id = uts.telegram_id AND uts.task_num = %s
@@ -2202,12 +2254,23 @@ def auto_task_timer():
                     pending_users = [u['telegram_id'] for u in cursor.fetchall()]
 
                     if diff_hours >= 24 and msg_lvl == 1 and t_msgs and t_msgs['msg_2']:
-                        cursor.execute("UPDATE kbkh_active_assignments SET current_msg = 2 WHERE id = %s", (assign['id'],))
+                        msg_updates.append((2, assign['id']))
                         actions_to_take.append({'users': pending_users, 'msg': t_msgs['msg_2']})
                         
                     elif diff_hours >= 48 and msg_lvl == 2 and t_msgs and t_msgs['msg_3']:
-                        cursor.execute("UPDATE kbkh_active_assignments SET current_msg = 3 WHERE id = %s", (assign['id'],))
+                        msg_updates.append((3, assign['id']))
                         actions_to_take.append({'users': pending_users, 'msg': t_msgs['msg_3']})
+                
+                if any_active and (all_teams_finished or force_end):
+                    users_to_notify = []
+                    for assign in assignments:
+                        cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (assign['team_name'],))
+                        users_to_notify.extend([u['telegram_id'] for u in cursor.fetchall()])
+                    actions_to_take.append({'users': list(set(users_to_notify)), 'msg': "Task END!\nThank you dear member♥️"})
+                    cursor.execute("DELETE FROM kbkh_active_assignments")
+                else:
+                    for lvl, a_id in msg_updates:
+                        cursor.execute("UPDATE kbkh_active_assignments SET current_msg = %s WHERE id = %s", (lvl, a_id))
                         
                 conn.commit()
             finally:
