@@ -1606,7 +1606,6 @@ def finalize_grading(sub_id, act, feedback, adm_id, chat_id):
             try: bot.delete_message(chat_id, m_id)
             except: pass
             
-        bot.send_message(chat_id, f"Task successfully {status_update}!✅")
     finally:
         conn.close()
         
@@ -1616,6 +1615,8 @@ def finalize_grading(sub_id, act, feedback, adm_id, chat_id):
         admin_state[adm_id].pop('grading_sub', None)
         admin_state[adm_id].pop('task_msgs', None)
         admin_state[adm_id].pop('prompt_msg_id', None)
+        
+    render_admin_submission_list(chat_id, message_id=None, is_completed=False)
 
 def render_ta_assign_page(chat_id, message_id, adm_id):
     state = admin_state.get(adm_id, {}).get('assigning', {})
@@ -2028,7 +2029,7 @@ def check_and_process_task_question(message, question_text, is_photo=False, phot
         user_state[tg_id]['temp_hold'] = {'q': question_text, 'p': photo_id}
         warn_msg = (f"↗️Your Question: {matched_line}\n\n"
                     f"↘️ Previously Submitted Question:\n{match['question_text']}\n\n"
-                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে ভগ। "
+                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে না। "
                     f"আপনার যদি মনে হয় Ai ভুল করছে তাহলে 'Submit Anyway' Button চেপে সাবমিট করতে পারবেন।")
         
         markup = InlineKeyboardMarkup()
