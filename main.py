@@ -105,6 +105,11 @@ def init_db():
             );
         """)
         
+        try:
+            cursor.execute("ALTER TABLE kbkh_task_records ADD COLUMN article_mark INT DEFAULT 0;")
+        except Exception:
+            pass # Column already exists
+            
         default_inst = {
             1: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!", 
             2: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!",
@@ -580,7 +585,6 @@ def confirm_qna_resign(call):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        # Check if they are QnA or Publisher
         cursor.execute("SELECT is_active FROM kbkh_publisher_moderators WHERE telegram_id = %s", (tg_id,))
         is_pub = cursor.fetchone()
         
@@ -991,7 +995,7 @@ def fetch_pub_user_article(call):
         except: pass
         
         text_info = f"\n\nName: {sub['fb_name']}\nTeam: {sub['team_name']}"
-        markup = get_pub_grading_kb(sub['id'])
+        markup = get_pub_grading_kb(sub['id'], mark=None, is_approve=False, is_reject=False)
         
         if sub['article_type'] == 'website_link' or sub['article_type'] == 'website_text':
             msg_body = f"{sub['content_text']}{text_info}"
@@ -1001,13 +1005,18 @@ def fetch_pub_user_article(call):
     finally:
         conn.close()
 
-def get_pub_grading_kb(sub_id, mark=None, is_reject=False):
+def get_pub_grading_kb(sub_id, mark=None, is_approve=False, is_reject=False):
     markup = InlineKeyboardMarkup(row_width=6)
     btns = []
     for i in range(1, 7):
         btns.append(InlineKeyboardButton(f"{i}✅" if str(mark)==str(i) else str(i), callback_data=f"pamk_{sub_id}_{i}"))
     markup.add(*btns)
-    markup.row(InlineKeyboardButton("💬Feedback", callback_data=f"pamk_{sub_id}_fbk"), InlineKeyboardButton("Reject❌" if is_reject else "Reject", callback_data=f"pamk_{sub_id}_rej"))
+    
+    app_btn = InlineKeyboardButton("Approve✅" if is_approve else "Approve", callback_data=f"pamk_{sub_id}_app")
+    rej_btn = InlineKeyboardButton("Reject❌" if is_reject else "Reject", callback_data=f"pamk_{sub_id}_rej")
+    markup.row(app_btn, rej_btn)
+    
+    markup.row(InlineKeyboardButton("💬Feedback", callback_data=f"pamk_{sub_id}_fbk"))
     markup.row(InlineKeyboardButton("Submit", callback_data=f"pamk_{sub_id}_sub"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
     return markup
 
@@ -1023,30 +1032,39 @@ def pub_grading_actions(call):
     sub_id = int(parts[1])
     action = parts[2]
     
+    mark = admin_state[mod_id].get(f'pamk_{sub_id}')
+    is_approve = admin_state[mod_id].get(f'paapp_{sub_id}', False)
+    is_reject = admin_state[mod_id].get(f'parej_{sub_id}', False)
+    
     if action in ["1", "2", "3", "4", "5", "6"]:
         admin_state[mod_id][f'pamk_{sub_id}'] = action
         admin_state[mod_id][f'parej_{sub_id}'] = False
-        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=action, is_reject=False))
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=action, is_approve=is_approve, is_reject=False))
+        except: pass
+        
+    elif action == "app":
+        admin_state[mod_id][f'paapp_{sub_id}'] = True
+        admin_state[mod_id][f'parej_{sub_id}'] = False
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=mark, is_approve=True, is_reject=False))
         except: pass
         
     elif action == "rej":
         admin_state[mod_id][f'pamk_{sub_id}'] = None
+        admin_state[mod_id][f'paapp_{sub_id}'] = False
         admin_state[mod_id][f'parej_{sub_id}'] = True
-        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=None, is_reject=True))
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=None, is_approve=False, is_reject=True))
         except: pass
         
     elif action == "fbk":
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
         msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=get_inline_cancel())
+        admin_state[mod_id][f'prompt_msg_id_{sub_id}'] = msg_box.message_id
         bot.register_next_step_handler(msg_box, process_pub_feedback, sub_id)
         
     elif action == "sub":
-        mark = admin_state[mod_id].get(f'pamk_{sub_id}')
-        is_reject = admin_state[mod_id].get(f'parej_{sub_id}')
-        
-        if not mark and not is_reject:
-            return bot.answer_callback_query(call.id, "Please select a mark or Reject first!", show_alert=True)
+        if not is_reject and not (mark and is_approve):
+            return bot.answer_callback_query(call.id, "Please select Mark and Approve, OR Reject!", show_alert=True)
             
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
@@ -1058,6 +1076,14 @@ def process_pub_feedback(message, sub_id):
     if mod_id not in admin_state: admin_state[mod_id] = {}
     admin_state[mod_id][f'pafbk_{sub_id}'] = message.text
     
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
+    
+    prompt_msg_id = admin_state[mod_id].get(f'prompt_msg_id_{sub_id}')
+    if prompt_msg_id:
+        try: bot.delete_message(message.chat.id, prompt_msg_id)
+        except: pass
+    
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -1065,14 +1091,15 @@ def process_pub_feedback(message, sub_id):
         sub = cursor.fetchone()
         
         mark = admin_state[mod_id].get(f'pamk_{sub_id}')
-        is_reject = admin_state[mod_id].get(f'parej_{sub_id}')
+        is_approve = admin_state[mod_id].get(f'paapp_{sub_id}', False)
+        is_reject = admin_state[mod_id].get(f'parej_{sub_id}', False)
         
-        markup = InlineKeyboardMarkup().row(InlineKeyboardButton("Submit", callback_data=f"pamk_{sub_id}_sub"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        markup = get_pub_grading_kb(sub_id, mark=mark, is_approve=is_approve, is_reject=is_reject)
         
         if is_reject:
-            cap_extra = f"\n\nSorry, your article has been REJECTED❌\nReject by Publisher: {admin_state[mod_id].get('mod_name', 'Moderator')}\n\n⏪Feedback: {message.text}"
+            cap_extra = f"\n\nName: {sub['fb_name']}\nTeam: {sub['team_name']}\n\nSTATUS: Rejected❌\n⏪Feedback: {message.text}"
         else:
-            cap_extra = f"\n\nName: {sub['fb_name']}\nTeam: {sub['team_name']}\n⏪Feedback: {message.text}\n🔖Marks: {mark}️⃣\nStatue: Approve ✅"
+            cap_extra = f"\n\nName: {sub['fb_name']}\nTeam: {sub['team_name']}\n🔖Marks: {mark}️⃣\n\nSTATUS: Approved✅\n⏪Feedback: {message.text}"
             
         if sub['article_type'] == 'groups':
             bot.send_photo(message.chat.id, sub['photo_id'], caption=f"{sub['content_text']}{cap_extra}", reply_markup=markup)
@@ -1101,6 +1128,12 @@ def finalize_pub_grading(sub_id, mod_id, chat_id):
         
         cursor.execute("UPDATE kbkh_article_submissions SET status = %s, mark = %s, feedback = %s WHERE id = %s", (status_update, final_mark, feedback, sub_id))
         cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = GREATEST(0, total_assigned - 1) WHERE telegram_id = %s", (mod_id,))
+        
+        month_name = (sub['created_at'] + timedelta(hours=6)).strftime("%B")
+        
+        if not is_reject and final_mark > 0:
+            cursor.execute("INSERT INTO kbkh_task_records (telegram_id, month, article_mark) VALUES (%s, %s, %s) ON CONFLICT (telegram_id, month) DO UPDATE SET article_mark = kbkh_task_records.article_mark + %s", (sub['telegram_id'], month_name, final_mark, final_mark))
+            
         conn.commit()
         
         # Notify User
@@ -1132,8 +1165,10 @@ def finalize_pub_grading(sub_id, mod_id, chat_id):
         
     if mod_id in admin_state:
         admin_state[mod_id].pop(f'pamk_{sub_id}', None)
+        admin_state[mod_id].pop(f'paapp_{sub_id}', None)
         admin_state[mod_id].pop(f'parej_{sub_id}', None)
         admin_state[mod_id].pop(f'pafbk_{sub_id}', None)
+        admin_state[mod_id].pop(f'prompt_msg_id_{sub_id}', None)
         
     render_pub_intern_list(chat_id, mod_id)
 
@@ -1184,8 +1219,9 @@ def status_callbacks(call):
             tdone = rec['task_done'] if rec else 0
             ttot = rec['task_total'] if rec else 0
             qmark = rec['qna_mark'] if rec else 0
+            amark = rec['article_mark'] if rec else 0
             
-            text = f"🗓️ Month - {month}\n\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}"
+            text = f"🗓️ Month - {month}\n\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}\nArticle Mark- {amark}"
             try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_inline_cancel())
             except: pass
         finally:
@@ -1226,13 +1262,14 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
             text += f"🔶--{t}--🔶\n"
             for m in teams[t]:
                 if m['telegram_id'] == expanded_u:
-                    cursor.execute("SELECT task_done, task_total, qna_mark FROM kbkh_task_records WHERE telegram_id = %s AND month = %s", (m['telegram_id'], month))
+                    cursor.execute("SELECT task_done, task_total, qna_mark, article_mark FROM kbkh_task_records WHERE telegram_id = %s AND month = %s", (m['telegram_id'], month))
                     rec = cursor.fetchone()
                     tdone = rec['task_done'] if rec else 0
                     ttot = rec['task_total'] if rec else 0
                     qmark = rec['qna_mark'] if rec else 0
+                    amark = rec['article_mark'] if rec else 0
                     
-                    text += f"🔻{m['fb_name']}\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}\n\n"
+                    text += f"🔻{m['fb_name']}\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}\nArticle Mark- {amark}\n\n"
                     markup.add(InlineKeyboardButton(f"{m['fb_name']} 🔻", callback_data=f"modstuser_{m['telegram_id']}"))
                 else:
                     text += f"🔺{m['fb_name']}\n"
@@ -2214,7 +2251,7 @@ def handle_general_content(message):
                 bot.send_message(message.chat.id, "Please provide the correct Google Document link❌", reply_markup=get_inline_cancel())
                 return
             user_state[tg_id]['art_data'] = {'type': 'website_link', 'text': text}
-            msg_text = f"{text}\n\n⚠️আপনি যে লিঙ্ক সাবমিট করেছেন সেটির View Access ঠিক আছে কি না তা নিশ্চিত করে হয়ে থাকলে \"Submit\" চাপুন।"
+            msg_text = f"{text}\n\n⚠️আপনি যে লিঙ্ক সাবমিট করেছেন সেটির View Access ঠিক আছে কি না তা নিশ্চিত হয়ে থাকলে \"Submit\" চাপুন।"
         else:
             user_state[tg_id]['art_data'] = {'type': 'website_text', 'text': text}
             msg_text = f"{text}"
