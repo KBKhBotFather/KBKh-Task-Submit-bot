@@ -1525,15 +1525,19 @@ def central_admin_actions(call):
         else: team_type = data.split("_")[1]
         
         curr = admin_state[adm_id].get('admin_mod_exp')
-        admin_state[adm_id]['admin_mod_exp'] = None if curr == team_type and data != "amod_write_open" else team_type
+        # Fix toggle logic: if it's already 'write' and we click 'amod_write_open', collapse it.
+        admin_state[adm_id]['admin_mod_exp'] = None if curr == team_type else team_type
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data.startswith("wreg_"):
         act = data.split("_")[1]
-        admin_state[adm_id]['writer_target'] = None
-        if act == "pend": render_writer_pending_list(call.message.chat.id, adm_id, call.message.message_id)
-        elif act == "mem": render_writer_members_list(call.message.chat.id, adm_id, call.message.message_id)
+        if act == "pend":
+            admin_state[adm_id]['writer_target'] = None
+            render_writer_pending_list(call.message.chat.id, adm_id, call.message.message_id)
+        elif act == "mem":
+            admin_state[adm_id]['writer_target'] = None
+            render_writer_members_list(call.message.chat.id, adm_id, call.message.message_id)
         elif act == "sub":
             target = admin_state.get(adm_id, {}).get('writer_target')
             if not target: return bot.answer_callback_query(call.id, "Select action first!", show_alert=True)
