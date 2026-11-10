@@ -548,13 +548,31 @@ def send_qna_preview(chat_id, q_dict, a_dict, markup=None):
     a_txt = a_dict.get('text', '')
     a_pic = a_dict.get('photo')
     
-    if q_pic and not a_pic: bot.send_photo(chat_id, q_pic, caption=f"{q_txt}\n\nAnswer: {a_txt}"[:1024], reply_markup=markup)
-    elif not q_pic and a_pic: bot.send_photo(chat_id, a_pic, caption=f"{q_txt}\n\nAnswer: {a_txt}"[:1024], reply_markup=markup)
+    combined_text = f"{q_txt}\n\nAnswer: {a_txt}"
+    ans_text = f"Answer: {a_txt}"
+    
+    if q_pic and not a_pic: 
+        if len(combined_text) <= 1024: bot.send_photo(chat_id, q_pic, caption=combined_text, reply_markup=markup)
+        else:
+            bot.send_photo(chat_id, q_pic)
+            bot.send_message(chat_id, combined_text, reply_markup=markup)
+    elif not q_pic and a_pic: 
+        if len(combined_text) <= 1024: bot.send_photo(chat_id, a_pic, caption=combined_text, reply_markup=markup)
+        else:
+            bot.send_photo(chat_id, a_pic)
+            bot.send_message(chat_id, combined_text, reply_markup=markup)
     elif q_pic and a_pic:
-        bot.send_photo(chat_id, q_pic, caption=q_txt)
-        bot.send_photo(chat_id, a_pic, caption=f"Answer: {a_txt}"[:1024], reply_markup=markup)
+        if len(q_txt) <= 1024: bot.send_photo(chat_id, q_pic, caption=q_txt)
+        else:
+            bot.send_photo(chat_id, q_pic)
+            bot.send_message(chat_id, q_txt)
+            
+        if len(ans_text) <= 1024: bot.send_photo(chat_id, a_pic, caption=ans_text, reply_markup=markup)
+        else:
+            bot.send_photo(chat_id, a_pic)
+            bot.send_message(chat_id, ans_text, reply_markup=markup)
     else:
-        bot.send_message(chat_id, f"{q_txt}\n\nAnswer: {a_txt}", reply_markup=markup)
+        bot.send_message(chat_id, combined_text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "qna_final_submit")
 def process_qna_submit(call):
@@ -828,13 +846,13 @@ def article_platform_selection(call):
     except: pass
         
     if call.data == "art_sel_web":
-        msg = bot.send_message(call.message.chat.id, "Please submit your article(GOOGLE DOCS LINK):", reply_markup=get_inline_cancel())
+        msg = bot.send_message(call.message.chat.id, "Please submit your article(GOOGLE DOCS LINK):\nCancel", reply_markup=get_inline_cancel())
         user_state[tg_id] = {'flow': 'art_wait_web', 'msg_id': msg.message_id}
     elif call.data in ["art_sel_grp", "art_sel_grp_b"]:
-        msg = bot.send_message(call.message.chat.id, "1. Submit your Article PHOTOCARD:", reply_markup=get_inline_cancel())
+        msg = bot.send_message(call.message.chat.id, "1. Submit your Article PHOTOCARD:\nCancel", reply_markup=get_inline_cancel())
         user_state[tg_id] = {'flow': 'art_wait_grp_photo', 'msg_id': msg.message_id}
     elif call.data == "art_sel_txt":
-        msg = bot.send_message(call.message.chat.id, "Please submit your Article TEXT:", reply_markup=get_inline_cancel())
+        msg = bot.send_message(call.message.chat.id, "Please submit your Article TEXT:\nCancel", reply_markup=get_inline_cancel())
         user_state[tg_id] = {'flow': 'art_wait_txt', 'msg_id': msg.message_id}
 
 @bot.callback_query_handler(func=lambda call: call.data == "art_final_submit")
@@ -936,7 +954,7 @@ def render_pub_intern_list(chat_id, mod_id, message_id=None):
             if teams[team]:
                 for m in teams[team]: markup.add(InlineKeyboardButton(f"{m['fb_name']} - {m['total']}", callback_data=f"pub_user_{m['telegram_id']}"))
                 
-        markup.row(InlineKeyboardButton("Back", callback_data="pub_back"), InlineKeyboardButton("Close", callback_data="cancel_action"))
+        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
             try: bot.edit_message_text("Intern Member List:", chat_id, message_id, reply_markup=markup)
@@ -961,7 +979,7 @@ def render_pub_other_list(chat_id, mod_id, message_id=None):
         markup = InlineKeyboardMarkup(row_width=1)
         for m in records:
             markup.add(InlineKeyboardButton(f"{m['short_name']} - {m['total']}", callback_data=f"pub_otheru_{m['telegram_id']}"))
-        markup.row(InlineKeyboardButton("Back", callback_data="pub_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
             try: bot.edit_message_text("Other Member List:", chat_id, message_id, reply_markup=markup)
@@ -971,7 +989,7 @@ def render_pub_other_list(chat_id, mod_id, message_id=None):
     finally:
         conn.close()
 
-@bot.callback_query_handler(func=lambda call: call.data in ["pub_intern", "pub_other", "pub_back"])
+@bot.callback_query_handler(func=lambda call: call.data in ["pub_intern", "pub_other"])
 def pub_category_selection(call):
     mod_id = call.from_user.id
     try: bot.answer_callback_query(call.id)
@@ -981,12 +999,6 @@ def pub_category_selection(call):
         render_pub_intern_list(call.message.chat.id, mod_id, call.message.message_id)
     elif call.data == "pub_other":
         render_pub_other_list(call.message.chat.id, mod_id, call.message.message_id)
-    elif call.data == "pub_back":
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Member", callback_data="pub_other"))
-        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        try: bot.edit_message_text("Select Category:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except: pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pub_user_") or call.data.startswith("pub_otheru_"))
 def fetch_pub_user_article(call):
@@ -1023,7 +1035,12 @@ def fetch_pub_user_article(call):
             msg_body = f"{sub['content_text']}{text_info}"
             bot.send_message(call.message.chat.id, msg_body, reply_markup=markup)
         elif sub['article_type'] == 'groups':
-            bot.send_photo(call.message.chat.id, sub['photo_id'], caption=f"{sub['content_text']}{text_info}", reply_markup=markup)
+            combined_text = f"{sub['content_text']}{text_info}"
+            if len(combined_text) <= 1024:
+                bot.send_photo(call.message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                bot.send_photo(call.message.chat.id, sub['photo_id'])
+                bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
     finally:
         conn.close()
 
@@ -1146,7 +1163,12 @@ def process_pub_feedback(message, sub_id, is_writer):
                 cap_extra = f"{cap_info}\n🔖Marks: {mark}️⃣\nSTATUS: Approved✅\n⏪Feedback: {message.text}"
             
         if sub['article_type'] == 'groups':
-            bot.send_photo(message.chat.id, sub['photo_id'], caption=f"{sub['content_text']}{cap_extra}", reply_markup=markup)
+            combined_text = f"{sub['content_text']}{cap_extra}"
+            if len(combined_text) <= 1024:
+                bot.send_photo(message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                bot.send_photo(message.chat.id, sub['photo_id'])
+                bot.send_message(message.chat.id, combined_text, reply_markup=markup)
         else:
             bot.send_message(message.chat.id, f"{sub['content_text']}{cap_extra}", reply_markup=markup)
     finally:
@@ -1197,8 +1219,14 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         if feedback: msg_to_user += f"\n⏪Feedback: {feedback}"
             
         try:
-            if sub['article_type'] == 'groups': bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=msg_to_user)
-            else: bot.send_message(sub['telegram_id'], msg_to_user)
+            if sub['article_type'] == 'groups': 
+                if len(msg_to_user) <= 1024:
+                    bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=msg_to_user)
+                else:
+                    bot.send_photo(sub['telegram_id'], sub['photo_id'])
+                    bot.send_message(sub['telegram_id'], msg_to_user)
+            else: 
+                bot.send_message(sub['telegram_id'], msg_to_user)
         except: pass
             
     finally:
@@ -1375,10 +1403,10 @@ def render_main_admin_mods(chat_id, adm_id, message_id):
             
         # Writer Team
         if exp_team == 'write':
-            markup.add(InlineKeyboardButton("Writer Team 🔻", callback_data="amod_write"))
+            markup.add(InlineKeyboardButton("Writer Team 🔻", callback_data="amod_write_open"))
             markup.row(InlineKeyboardButton("Pending Registration", callback_data="wreg_pend"), InlineKeyboardButton("Member's", callback_data="wreg_mem"))
         else:
-            markup.add(InlineKeyboardButton("Writer Team 🔺", callback_data="amod_write"))
+            markup.add(InlineKeyboardButton("Writer Team 🔺", callback_data="amod_write_open"))
             
         markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
@@ -1406,8 +1434,8 @@ def render_writer_pending_list(chat_id, adm_id, message_id):
                 app_icon = "🔲"
                 rej_icon = "❌"
                 if target_w and target_w['id'] == w['telegram_id']:
-                    if target_w['action'] == 'approve': app_icon = "✅"
-                    elif target_w['action'] == 'reject': rej_icon = "❌✅"
+                    if target_w['action'] == 'app': app_icon = "✅"
+                    elif target_w['action'] == 'rej': rej_icon = "❌✅"
                 
                 markup.row(
                     InlineKeyboardButton(w['short_name'], callback_data="ignore"),
@@ -1439,8 +1467,8 @@ def render_writer_members_list(chat_id, adm_id, message_id):
                 blk_icon = "⛔🔒" if w['is_blocked'] else "⛔"
                 kck_icon = "❌"
                 if target_w and target_w['id'] == w['telegram_id']:
-                    if target_w['action'] == 'block': blk_icon = "⛔" if w['is_blocked'] else "⛔🔒"
-                    elif target_w['action'] == 'kick': kck_icon = "❌✅"
+                    if target_w['action'] == 'blk': blk_icon = "⛔" if w['is_blocked'] else "⛔🔒"
+                    elif target_w['action'] == 'kck': kck_icon = "❌✅"
                 
                 markup.row(
                     InlineKeyboardButton(f"{w['short_name']} - {total_sub}", callback_data="ignore"),
@@ -1513,11 +1541,11 @@ def central_admin_actions(call):
             conn = get_db_connection()
             try:
                 cursor = conn.cursor()
-                if target['action'] == 'approve':
+                if target['action'] == 'app':
                     cursor.execute("UPDATE kbkh_writers SET status = 'Approved' WHERE telegram_id = %s", (target['id'],))
                     try: bot.send_message(target['id'], "Welcome!❤️", reply_markup=writer_main_menu())
                     except: pass
-                elif target['action'] == 'reject':
+                elif target['action'] == 'rej':
                     cursor.execute("DELETE FROM kbkh_writers WHERE telegram_id = %s", (target['id'],))
                     try: bot.send_message(target['id'], "Application REJECTED❌", reply_markup=ReplyKeyboardRemove())
                     except: pass
@@ -1701,11 +1729,21 @@ def central_admin_actions(call):
             try:
                 items = json.loads(sub['content_text'])
                 for item in items:
-                    if item.get('photo'): m = bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
+                    if item.get('photo'):
+                        if item.get('text') and len(item['text']) > 1024:
+                            bot.send_photo(call.message.chat.id, item['photo'])
+                            m = bot.send_message(call.message.chat.id, item['text'])
+                        else:
+                            m = bot.send_photo(call.message.chat.id, item['photo'], caption=item.get('text', ''))
                     else: m = bot.send_message(call.message.chat.id, item.get('text', ''))
                     admin_state[adm_id]['task_msgs'].append(m.message_id)
             except:
-                if sub['photo_id']: m = bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
+                if sub['photo_id']:
+                    if sub['content_text'] and len(sub['content_text']) > 1024:
+                        bot.send_photo(call.message.chat.id, sub['photo_id'])
+                        m = bot.send_message(call.message.chat.id, sub['content_text'])
+                    else:
+                        m = bot.send_photo(call.message.chat.id, sub['photo_id'], caption=sub['content_text'])
                 else: m = bot.send_message(call.message.chat.id, sub['content_text'])
                 admin_state[adm_id]['task_msgs'].append(m.message_id)
                 
@@ -2083,11 +2121,21 @@ def process_admin_feedback(message, sub_id):
             try:
                 items = json.loads(sub['content_text'])
                 for item in items:
-                    if item.get('photo'): m = bot.send_photo(message.chat.id, item['photo'], caption=item.get('text', ''))
+                    if item.get('photo'):
+                        if item.get('text') and len(item['text']) > 1024:
+                            bot.send_photo(message.chat.id, item['photo'])
+                            m = bot.send_message(message.chat.id, item['text'])
+                        else:
+                            m = bot.send_photo(message.chat.id, item['photo'], caption=item.get('text', ''))
                     else: m = bot.send_message(message.chat.id, item.get('text', ''))
                     admin_state[adm_id]['task_msgs'].append(m.message_id)
             except:
-                if sub['photo_id']: m = bot.send_photo(message.chat.id, sub['photo_id'], caption=sub['content_text'])
+                if sub['photo_id']:
+                    if sub['content_text'] and len(sub['content_text']) > 1024:
+                        bot.send_photo(message.chat.id, sub['photo_id'])
+                        m = bot.send_message(message.chat.id, sub['content_text'])
+                    else:
+                        m = bot.send_photo(message.chat.id, sub['photo_id'], caption=sub['content_text'])
                 else: m = bot.send_message(message.chat.id, sub['content_text'])
                 admin_state[adm_id]['task_msgs'].append(m.message_id)
 
@@ -2125,10 +2173,20 @@ def finalize_grading(sub_id, act, feedback, adm_id, chat_id):
                 try:
                     items = json.loads(sub['content_text'])
                     for item in items:
-                        if item.get('photo'): bot.send_photo(sub['telegram_id'], item['photo'], caption=item.get('text', ''))
+                        if item.get('photo'):
+                            if item.get('text') and len(item['text']) > 1024:
+                                bot.send_photo(sub['telegram_id'], item['photo'])
+                                bot.send_message(sub['telegram_id'], item.get('text', ''))
+                            else:
+                                bot.send_photo(sub['telegram_id'], item['photo'], caption=item.get('text', ''))
                         else: bot.send_message(sub['telegram_id'], item.get('text', ''))
                 except:
-                    if sub['photo_id']: bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=sub['content_text'])
+                    if sub['photo_id']:
+                        if sub['content_text'] and len(sub['content_text']) > 1024:
+                            bot.send_photo(sub['telegram_id'], sub['photo_id'])
+                            bot.send_message(sub['telegram_id'], sub['content_text'])
+                        else:
+                            bot.send_photo(sub['telegram_id'], sub['photo_id'], caption=sub['content_text'])
                     else: bot.send_message(sub['telegram_id'], sub['content_text'])
                 fb_msg = f"{base_msg}\n\n⏩ FEEDBACK: {feedback}"
                 bot.send_message(sub['telegram_id'], fb_msg)
@@ -2440,7 +2498,11 @@ def handle_general_content(message):
         try: bot.delete_message(message.chat.id, user_state[tg_id].get('msg_id'))
         except: pass
         markup = InlineKeyboardMarkup().row(InlineKeyboardButton("Submit", callback_data="art_final_submit"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        msg = bot.send_photo(message.chat.id, user_state[tg_id]['art_data']['photo'], caption=message.text, reply_markup=markup)
+        if len(message.text) <= 1024:
+            msg = bot.send_photo(message.chat.id, user_state[tg_id]['art_data']['photo'], caption=message.text, reply_markup=markup)
+        else:
+            bot.send_photo(message.chat.id, user_state[tg_id]['art_data']['photo'])
+            msg = bot.send_message(message.chat.id, message.text, reply_markup=markup)
         user_state[tg_id]['msg_id'] = msg.message_id
         return
         
@@ -2536,7 +2598,12 @@ def handle_general_content(message):
         caption = message.caption if message.content_type == 'photo' else message.text
         user_state[tg_id]['single_sub'] = {'photo': photo_id, 'caption': caption}
         markup = InlineKeyboardMarkup().row(InlineKeyboardButton("Submit Task", callback_data="final_submit_task"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
-        if photo_id: bot.send_photo(message.chat.id, photo_id, caption=caption, reply_markup=markup)
+        if photo_id:
+            if caption and len(caption) > 1024:
+                bot.send_photo(message.chat.id, photo_id)
+                bot.send_message(message.chat.id, caption, reply_markup=markup)
+            else:
+                bot.send_photo(message.chat.id, photo_id, caption=caption, reply_markup=markup)
         else: bot.send_message(message.chat.id, caption, reply_markup=markup)
 
 def check_and_process_task_question(message, question_text, is_photo=False, photo_id=None):
@@ -2585,7 +2652,12 @@ def add_task_question_to_state(chat_id, tg_id, text, photo_id=None):
     user_state[tg_id]['waiting_btn'] = True 
     items = user_state[tg_id]['collected']
     for i in items:
-        if i['photo']: bot.send_photo(chat_id, i['photo'], caption=i['text'])
+        if i['photo']:
+            if i['text'] and len(i['text']) > 1024:
+                bot.send_photo(chat_id, i['photo'])
+                bot.send_message(chat_id, i['text'])
+            else:
+                bot.send_photo(chat_id, i['photo'], caption=i['text'])
         else: bot.send_message(chat_id, i['text'])
     markup = InlineKeyboardMarkup(row_width=3)
     markup.row(InlineKeyboardButton("Yes", callback_data="add_more_q"), InlineKeyboardButton("No", callback_data="final_submit_task"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
