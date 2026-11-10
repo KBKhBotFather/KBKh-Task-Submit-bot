@@ -2640,7 +2640,7 @@ def check_and_process_task_question(message, question_text, is_photo=False, phot
     if match:
         user_state[tg_id]['temp_hold'] = {'q': question_text, 'p': photo_id}
         warn_msg = (f"↗️Your Question: {matched_line}\n\n↘️ Previously Submitted Question:\n{match['question_text']}\n\n"
-                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে না। "
+                    f"⚠️দুইটি প্রশ্নের মধ্যে অনেকটা মিল পাওয়া গিয়েছে। তাই এটি পোস্ট করা যাবে লাল। "
                     f"আপনার যদি মনে হয় Ai ভুল করছে তাহলে 'Submit Anyway' Button চেপে সাবমিট করতে পারবেন।")
         markup = InlineKeyboardMarkup().row(InlineKeyboardButton("Submit Anyway", callback_data="force_add_q"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, warn_msg, reply_markup=markup)
