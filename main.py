@@ -827,13 +827,13 @@ def submit_article_start(message):
         
     if is_writer:
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.row(InlineKeyboardButton("For Website", callback_data="art_sel_web"), InlineKeyboardButton("For BigyanDiary(Text+Img)", callback_data="art_sel_grp_b"))
-        markup.row(InlineKeyboardButton("For BigyanDiary(Only Text)", callback_data="art_sel_txt"))
-        markup.row(InlineKeyboardButton("Submit", callback_data="ignore"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        markup.row(InlineKeyboardButton("Website", callback_data="art_sel_web"), InlineKeyboardButton("BigyanDiary(Txt+Img)", callback_data="art_sel_grp_b"))
+        markup.row(InlineKeyboardButton("BigyanDiary(Only Txt)", callback_data="art_sel_txt"))
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, "Choose category:", reply_markup=markup)
     else:
         markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(InlineKeyboardButton("For Website", callback_data="art_sel_web"), InlineKeyboardButton("For Group's", callback_data="art_sel_grp"))
+        markup.row(InlineKeyboardButton("Website", callback_data="art_sel_web"), InlineKeyboardButton("Group's", callback_data="art_sel_grp"))
         markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, "Choose category:", reply_markup=markup)
 
@@ -897,7 +897,7 @@ def pub_pending_articles(message):
         writer = cursor.fetchone()
         
         if writer and writer['status'] == 'Approved':
-            cursor.execute("SELECT id FROM kbkh_article_submissions WHERE telegram_id = %s AND status = 'Approved' ORDER BY id ASC", (tg_id,))
+            cursor.execute("SELECT * FROM kbkh_article_submissions WHERE telegram_id = %s AND status = 'Approved' ORDER BY id ASC", (tg_id,))
             approved = cursor.fetchall()
             if not approved:
                 bot.send_message(message.chat.id, "No approved articles found in the waiting list!")
@@ -917,7 +917,7 @@ def pub_pending_articles(message):
         if not mod or not mod['is_active']: return
             
         markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Member", callback_data="pub_other"))
+        markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Members", callback_data="pub_other"))
         markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, "Select Category:", reply_markup=markup)
     finally:
@@ -927,10 +927,31 @@ def pub_pending_articles(message):
 def show_writer_waiting_article(call):
     try: bot.answer_callback_query(call.id)
     except: pass
+    art_id = int(call.data.split("_")[1])
     try: bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("Close", callback_data="cancel_action"))
-    bot.send_message(call.message.chat.id, "We hope your article will be published soon. You will receive a confirmation once it is published. Thank you!❤️", reply_markup=markup)
+    
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT * FROM kbkh_article_submissions WHERE id = %s", (art_id,))
+        art = cursor.fetchone()
+        if not art: return
+        
+        msg_extra = "\n\nWe hope your article will be published soon. You will receive a confirmation once it is published. Thank you!❤️"
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("Close", callback_data="cancel_action"))
+        
+        if art['article_type'] in ['website_link', 'website_text', 'text_only']:
+            bot.send_message(call.message.chat.id, f"{art['content_text']}{msg_extra}", reply_markup=markup)
+        elif art['article_type'] == 'groups':
+            combined_text = f"{art['content_text']}{msg_extra}"
+            if len(combined_text) <= 1024:
+                bot.send_photo(call.message.chat.id, art['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                bot.send_photo(call.message.chat.id, art['photo_id'])
+                bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+    finally:
+        conn.close()
 
 def render_pub_intern_list(chat_id, mod_id, message_id=None):
     conn = get_db_connection()
@@ -954,13 +975,13 @@ def render_pub_intern_list(chat_id, mod_id, message_id=None):
             if teams[team]:
                 for m in teams[team]: markup.add(InlineKeyboardButton(f"{m['fb_name']} - {m['total']}", callback_data=f"pub_user_{m['telegram_id']}"))
                 
-        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        markup.row(InlineKeyboardButton("Back", callback_data="pub_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
-            try: bot.edit_message_text("Intern Member List:", chat_id, message_id, reply_markup=markup)
+            try: bot.edit_message_text("Intern Members List:", chat_id, message_id, reply_markup=markup)
             except: pass
         else:
-            bot.send_message(chat_id, "Intern Member List:", reply_markup=markup)
+            bot.send_message(chat_id, "Intern Members List:", reply_markup=markup)
     finally:
         conn.close()
 
@@ -979,17 +1000,17 @@ def render_pub_other_list(chat_id, mod_id, message_id=None):
         markup = InlineKeyboardMarkup(row_width=1)
         for m in records:
             markup.add(InlineKeyboardButton(f"{m['short_name']} - {m['total']}", callback_data=f"pub_otheru_{m['telegram_id']}"))
-        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        markup.row(InlineKeyboardButton("Back", callback_data="pub_back"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         
         if message_id:
-            try: bot.edit_message_text("Other Member List:", chat_id, message_id, reply_markup=markup)
+            try: bot.edit_message_text("Other Members List:", chat_id, message_id, reply_markup=markup)
             except: pass
         else:
-            bot.send_message(chat_id, "Other Member List:", reply_markup=markup)
+            bot.send_message(chat_id, "Other Members List:", reply_markup=markup)
     finally:
         conn.close()
 
-@bot.callback_query_handler(func=lambda call: call.data in ["pub_intern", "pub_other"])
+@bot.callback_query_handler(func=lambda call: call.data in ["pub_intern", "pub_other", "pub_back"])
 def pub_category_selection(call):
     mod_id = call.from_user.id
     try: bot.answer_callback_query(call.id)
@@ -999,6 +1020,12 @@ def pub_category_selection(call):
         render_pub_intern_list(call.message.chat.id, mod_id, call.message.message_id)
     elif call.data == "pub_other":
         render_pub_other_list(call.message.chat.id, mod_id, call.message.message_id)
+    elif call.data == "pub_back":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Members", callback_data="pub_other"))
+        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        try: bot.edit_message_text("Select Category:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pub_user_") or call.data.startswith("pub_otheru_"))
 def fetch_pub_user_article(call):
@@ -1106,7 +1133,7 @@ def pub_grading_actions(call):
     elif action == "fbk":
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
-        msg_box = bot.send_message(call.message.chat.id, "Please write feedback:", reply_markup=get_inline_cancel())
+        msg_box = bot.send_message(call.message.chat.id, "Please write feedback:\nCancel", reply_markup=get_inline_cancel())
         admin_state[mod_id][f'prompt_msg_id_{sub_id}'] = msg_box.message_id
         bot.register_next_step_handler(msg_box, process_pub_feedback, sub_id, is_writer)
         
@@ -1189,7 +1216,7 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         mod_info = cursor.fetchone()
         mod_name = mod_info['mod_name'] if mod_info else "Moderator"
         
-        status_update = "Rejected" if is_reject else ("On Hold" if sub['article_type'] == 'website_link' else "Approved")
+        status_update = "Rejected" if is_reject else "Approved"
         final_mark = int(mark) if mark and not is_writer else 0
         
         cursor.execute("UPDATE kbkh_article_submissions SET status = %s, mark = %s, feedback = %s WHERE id = %s", (status_update, final_mark, feedback, sub_id))
@@ -1455,7 +1482,7 @@ def render_writer_members_list(chat_id, adm_id, message_id):
         cursor.execute("SELECT telegram_id, short_name, is_blocked FROM kbkh_writers WHERE status = 'Approved'")
         writers = cursor.fetchall()
         
-        markup = InlineKeyboardMarkup(row_width=3)
+        markup = InlineKeyboardMarkup(row_width=2)
         if not writers:
             markup.add(InlineKeyboardButton("No writers found", callback_data="ignore"))
         else:
@@ -1470,8 +1497,8 @@ def render_writer_members_list(chat_id, adm_id, message_id):
                     if target_w['action'] == 'blk': blk_icon = "⛔" if w['is_blocked'] else "⛔🔒"
                     elif target_w['action'] == 'kck': kck_icon = "❌✅"
                 
+                markup.row(InlineKeyboardButton(f"{w['short_name']} - {total_sub}", callback_data="ignore"))
                 markup.row(
-                    InlineKeyboardButton(f"{w['short_name']} - {total_sub}", callback_data="ignore"),
                     InlineKeyboardButton(blk_icon, callback_data=f"wact_blk_{w['telegram_id']}"),
                     InlineKeyboardButton(kck_icon, callback_data=f"wact_kck_{w['telegram_id']}")
                 )
@@ -1525,19 +1552,15 @@ def central_admin_actions(call):
         else: team_type = data.split("_")[1]
         
         curr = admin_state[adm_id].get('admin_mod_exp')
-        # Fix toggle logic: if it's already 'write' and we click 'amod_write_open', collapse it.
-        admin_state[adm_id]['admin_mod_exp'] = None if curr == team_type else team_type
+        admin_state[adm_id]['admin_mod_exp'] = None if curr == team_type and data != "amod_write_open" else team_type
         render_main_admin_mods(call.message.chat.id, adm_id, call.message.message_id)
         return
         
     elif data.startswith("wreg_"):
         act = data.split("_")[1]
-        if act == "pend":
-            admin_state[adm_id]['writer_target'] = None
-            render_writer_pending_list(call.message.chat.id, adm_id, call.message.message_id)
-        elif act == "mem":
-            admin_state[adm_id]['writer_target'] = None
-            render_writer_members_list(call.message.chat.id, adm_id, call.message.message_id)
+        admin_state[adm_id]['writer_target'] = None
+        if act == "pend": render_writer_pending_list(call.message.chat.id, adm_id, call.message.message_id)
+        elif act == "mem": render_writer_members_list(call.message.chat.id, adm_id, call.message.message_id)
         elif act == "sub":
             target = admin_state.get(adm_id, {}).get('writer_target')
             if not target: return bot.answer_callback_query(call.id, "Select action first!", show_alert=True)
