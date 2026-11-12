@@ -168,8 +168,8 @@ def writer_main_menu():
     return markup
 
 def secondary_admin_menu():
-    markup = ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, is_persistent=True)
-    markup.add(KeyboardButton("Members Status"))
+    markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, is_persistent=True)
+    markup.row(KeyboardButton("KBKh Team"), KeyboardButton("BKLn Team"))
     return markup
 
 def get_inline_cancel():
@@ -319,7 +319,7 @@ def process_door_login(message):
         user_state.pop(tg_id, None)
         
     elif key == "ADMINKEY22":
-        bot.send_message(message.chat.id, "Welcome Sir❤️\nYou are now in the Secondary Admin Panel!", reply_markup=secondary_admin_menu())
+        bot.send_message(message.chat.id, "Welcome Sir!❤️", reply_markup=secondary_admin_menu())
         user_state.pop(tg_id, None)
         
     elif key == "WriterKEY22":
@@ -887,6 +887,10 @@ def process_article_submit(call):
 def on_hold_coming_soon(message):
     bot.send_message(message.chat.id, "⏳ This feature is Coming Soon!")
 
+@bot.message_handler(func=lambda msg: msg.text == "BKLn Team")
+def on_hold_coming_soon_bkln(message):
+    bot.send_message(message.chat.id, "⏳ Coming Soon!")
+
 @bot.message_handler(func=lambda msg: msg.text in ["Pending Articles", "Pending Article"])
 def pub_pending_articles(message):
     tg_id = message.from_user.id
@@ -948,8 +952,12 @@ def show_writer_waiting_article(call):
             if len(combined_text) <= 1024:
                 bot.send_photo(call.message.chat.id, art['photo_id'], caption=combined_text, reply_markup=markup)
             else:
-                bot.send_photo(call.message.chat.id, art['photo_id'])
+                m1 = bot.send_photo(call.message.chat.id, art['photo_id'])
                 bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+                user_id = call.from_user.id
+                if user_id not in admin_state: admin_state[user_id] = {}
+                if 'task_msgs' not in admin_state[user_id]: admin_state[user_id]['task_msgs'] = []
+                admin_state[user_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
@@ -1066,8 +1074,11 @@ def fetch_pub_user_article(call):
             if len(combined_text) <= 1024:
                 bot.send_photo(call.message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
             else:
-                bot.send_photo(call.message.chat.id, sub['photo_id'])
+                m1 = bot.send_photo(call.message.chat.id, sub['photo_id'])
                 bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+                if mod_id not in admin_state: admin_state[mod_id] = {}
+                if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
+                admin_state[mod_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
@@ -1281,7 +1292,7 @@ def get_months_kb(prefix):
     markup.add(InlineKeyboardButton("Close", callback_data="cancel_action"))
     return markup
 
-@bot.message_handler(func=lambda msg: msg.text in ["My Task Status", "Members Status"])
+@bot.message_handler(func=lambda msg: msg.text in ["My Task Status", "Members Status", "KBKh Team"])
 def status_selectors(message):
     tg_id = message.from_user.id
     if message.text == "My Task Status":
@@ -1289,7 +1300,7 @@ def status_selectors(message):
     else:
         bot.send_message(message.chat.id, "🗓️Please Select Month:", reply_markup=get_months_kb("modst"))
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("myts_") or call.data.startswith("modst_") or call.data.startswith("modstuser_") or call.data == "back_modst")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("myts_") or call.data.startswith("modst_") or call.data.startswith("modstteam_") or call.data == "back_modst")
 def status_callbacks(call):
     tg_id = call.from_user.id
     try: bot.answer_callback_query(call.id)
@@ -1326,14 +1337,14 @@ def status_callbacks(call):
         month = parts[1]
         if tg_id not in admin_state: admin_state[tg_id] = {}
         admin_state[tg_id]['modst_month'] = month
-        admin_state[tg_id]['modst_exp'] = None 
+        admin_state[tg_id]['modst_exp_team'] = None 
         render_members_status_list(call.message.chat.id, call.message.message_id, tg_id, month)
         
-    elif action == "modstuser":
-        u_id = int(parts[1])
+    elif action == "modstteam":
+        t_name = parts[1]
         if tg_id not in admin_state: admin_state[tg_id] = {}
-        current = admin_state[tg_id].get('modst_exp')
-        admin_state[tg_id]['modst_exp'] = None if current == u_id else u_id
+        current = admin_state[tg_id].get('modst_exp_team')
+        admin_state[tg_id]['modst_exp_team'] = None if current == t_name else t_name
         render_members_status_list(call.message.chat.id, call.message.message_id, tg_id, admin_state[tg_id].get('modst_month'))
 
 def render_members_status_list(chat_id, message_id, mod_id, month):
@@ -1346,29 +1357,34 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
         for m in members:
             if m['team_name'] in teams: teams[m['team_name']].append(m)
                 
-        expanded_u = admin_state.get(mod_id, {}).get('modst_exp')
-        text = f"🗓️ Month - {month}\n\n"
+        expanded_team = admin_state.get(mod_id, {}).get('modst_exp_team')
+        
+        text = f"🗓️Month - {month}\n\n"
         markup = InlineKeyboardMarkup(row_width=1)
+        
         for t in ['Team Alpha', 'Team Beta', 'Team Gamma']:
-            if not teams[t]: continue
-            text += f"🔶--{t}--🔶\n"
-            for m in teams[t]:
-                if m['telegram_id'] == expanded_u:
-                    cursor.execute("SELECT task_done, task_total, qna_mark, article_mark FROM kbkh_task_records WHERE telegram_id = %s AND month = %s", (m['telegram_id'], month))
-                    rec = cursor.fetchone()
-                    tdone = rec['task_done'] if rec else 0
-                    ttot = rec['task_total'] if rec else 0
-                    qmark = rec['qna_mark'] if rec else 0
-                    amark = rec['article_mark'] if rec else 0
-                    text += f"🔻{m['fb_name']}\nSpecial Task- {tdone}/{ttot}\nQnA Mark - {qmark}\nArticle Mark- {amark}\n\n"
-                    markup.add(InlineKeyboardButton(f"{m['fb_name']} 🔻", callback_data=f"modstuser_{m['telegram_id']}"))
+            if expanded_team == t:
+                markup.add(InlineKeyboardButton(f"🔺{t}", callback_data=f"modstteam_{t}"))
+                if not teams[t]:
+                    pass
                 else:
-                    text += f"🔺{m['fb_name']}\n"
-                    markup.add(InlineKeyboardButton(f"{m['fb_name']} 🔺", callback_data=f"modstuser_{m['telegram_id']}"))
-            text += "\n"
-            
+                    for m in teams[t]:
+                        cursor.execute("SELECT task_done, task_total, qna_mark, article_mark FROM kbkh_task_records WHERE telegram_id = %s AND month = %s", (m['telegram_id'], month))
+                        rec = cursor.fetchone()
+                        tdone = rec['task_done'] if rec else 0
+                        ttot = rec['task_total'] if rec else 0
+                        qmark = rec['qna_mark'] if rec else 0
+                        amark = rec['article_mark'] if rec else 0
+                        
+                        text += f"👤{m['fb_name']} \n"
+                        text += f"- Special Task - {tdone}/{ttot}\n"
+                        text += f"- QnA Mark - {qmark}\n"
+                        text += f"- Article Mark - {amark}\n\n"
+            else:
+                markup.add(InlineKeyboardButton(f"🔻{t}", callback_data=f"modstteam_{t}"))
+                
         markup.row(InlineKeyboardButton("Back", callback_data="back_modst"), InlineKeyboardButton("Close", callback_data="cancel_action"))
-        try: bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try: bot.edit_message_text(text.strip(), chat_id, message_id, reply_markup=markup)
         except: pass
     finally:
         conn.close()
@@ -1488,7 +1504,7 @@ def render_writer_members_list(chat_id, adm_id, message_id):
         else:
             target_w = admin_state.get(adm_id, {}).get('writer_target')
             for w in writers:
-                cursor.execute("SELECT COUNT(*) FROM kbkh_article_submissions WHERE telegram_id = %s", (w['telegram_id'],))
+                cursor.execute("SELECT COUNT(*) FROM kbkh_article_submissions WHERE telegram_id = %s AND status = 'Approved'", (w['telegram_id'],))
                 total_sub = cursor.fetchone()['count']
                 
                 blk_icon = "⛔🔒" if w['is_blocked'] else "⛔"
@@ -1525,6 +1541,11 @@ def universal_cancel_action(call):
         
     if user_id in admin_state and 'task_msgs' in admin_state[user_id]:
         for m_id in admin_state[user_id]['task_msgs']:
+            try: bot.delete_message(call.message.chat.id, m_id)
+            except: pass
+            
+    if user_id in user_state and 'task_msgs' in user_state[user_id]:
+        for m_id in user_state[user_id]['task_msgs']:
             try: bot.delete_message(call.message.chat.id, m_id)
             except: pass
 
@@ -2460,7 +2481,7 @@ def handle_general_content(message):
     tg_id = message.from_user.id
     if str(tg_id) == ADMIN_CHAT_ID: return
         
-    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "ADMINKEY22", "WriterKEY22"]
+    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "ADMINKEY22", "WriterKEY22", "KBKh Team", "BKLn Team"]
     if message.content_type == 'text' and message.text in menu_items: return
         
     if tg_id in user_state and user_state[tg_id].get('waiting_btn'):
