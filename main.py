@@ -287,7 +287,9 @@ def handle_secret_keys(message):
     if message.text == "WriterKEY22":
         msg_box = bot.send_message(message.chat.id, "Please enter your short name(In English):", reply_markup=markup)
     else:
-        msg_box = bot.send_message(message.chat.id, "Please Enter Your Full Name:", reply_markup=markup)
+        msg_box = bot.send_message(message.chat.id, "Please enter your full name:", reply_markup=markup)
+        
+    user_state[tg_id]['prompt_msg_id'] = msg_box.message_id
     bot.register_next_step_handler(msg_box, process_door_login)
 
 def process_door_login(message):
@@ -297,6 +299,13 @@ def process_door_login(message):
         
     key = user_state[tg_id]['login_flow']
     user_state[tg_id]['mod_name'] = message.text.strip()
+    
+    prompt_msg_id = user_state[tg_id].get('prompt_msg_id')
+    if prompt_msg_id:
+        try: bot.delete_message(message.chat.id, prompt_msg_id)
+        except: pass
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
     
     if key == "QnAKEY22":
         markup = InlineKeyboardMarkup(row_width=3)
@@ -324,12 +333,20 @@ def process_door_login(message):
         
     elif key == "WriterKEY22":
         msg_box = bot.send_message(message.chat.id, "Please enter your full name(In English):", reply_markup=get_inline_cancel())
+        user_state[tg_id]['prompt_msg_id'] = msg_box.message_id
         bot.register_next_step_handler(msg_box, finalize_writer_login)
 
 def finalize_writer_login(message):
     tg_id = message.from_user.id
     if tg_id not in user_state or 'login_flow' not in user_state[tg_id]:
         return
+        
+    prompt_msg_id = user_state[tg_id].get('prompt_msg_id')
+    if prompt_msg_id:
+        try: bot.delete_message(message.chat.id, prompt_msg_id)
+        except: pass
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
         
     full_name = message.text.strip()
     short_name = user_state[tg_id]['mod_name']
@@ -620,17 +637,21 @@ def confirm_qna_resign(call):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT is_active FROM kbkh_publisher_moderators WHERE telegram_id = %s", (tg_id,))
-        is_pub = cursor.fetchone()
+        cursor.execute("SELECT is_active FROM kbkh_publisher_moderators WHERE telegram_id = %s AND is_active = TRUE", (tg_id,))
+        is_active_pub = cursor.fetchone()
         
-        if is_pub:
+        cursor.execute("SELECT is_active FROM kbkh_qna_moderators WHERE telegram_id = %s AND is_active = TRUE", (tg_id,))
+        is_active_qna = cursor.fetchone()
+        
+        if is_active_pub:
             cursor.execute("UPDATE kbkh_publisher_moderators SET is_active = FALSE, resign_count = resign_count + 1 WHERE telegram_id = %s", (tg_id,))
             cursor.execute("SELECT id FROM kbkh_article_submissions WHERE assigned_grader = %s AND status = 'Pending'", (tg_id,))
             for p in cursor.fetchall():
                 new_mod = get_least_loaded_pub_mod()
                 cursor.execute("UPDATE kbkh_article_submissions SET assigned_grader = %s WHERE id = %s", (new_mod, p['id']))
                 if new_mod: cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = total_assigned + 1 WHERE telegram_id = %s", (new_mod,))
-        else:
+                
+        if is_active_qna:
             cursor.execute("UPDATE kbkh_qna_moderators SET is_active = FALSE, resign_count = resign_count + 1 WHERE telegram_id = %s", (tg_id,))
             cursor.execute("SELECT id FROM kbkh_qna_submissions WHERE assigned_grader = %s AND status = 'Pending'", (tg_id,))
             for p in cursor.fetchall():
@@ -949,15 +970,12 @@ def show_writer_waiting_article(call):
             bot.send_message(call.message.chat.id, f"{art['content_text']}{msg_extra}", reply_markup=markup)
         elif art['article_type'] == 'groups':
             combined_text = f"{art['content_text']}{msg_extra}"
-            if len(combined_text) <= 1024:
-                bot.send_photo(call.message.chat.id, art['photo_id'], caption=combined_text, reply_markup=markup)
-            else:
-                m1 = bot.send_photo(call.message.chat.id, art['photo_id'])
-                bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
-                user_id = call.from_user.id
-                if user_id not in admin_state: admin_state[user_id] = {}
-                if 'task_msgs' not in admin_state[user_id]: admin_state[user_id]['task_msgs'] = []
-                admin_state[user_id]['task_msgs'].append(m1.message_id)
+            m1 = bot.send_photo(call.message.chat.id, art['photo_id'])
+            m2 = bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+            user_id = call.from_user.id
+            if user_id not in user_state: user_state[user_id] = {}
+            if 'task_msgs' not in user_state[user_id]: user_state[user_id]['task_msgs'] = []
+            user_state[user_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
@@ -1071,14 +1089,11 @@ def fetch_pub_user_article(call):
             bot.send_message(call.message.chat.id, msg_body, reply_markup=markup)
         elif sub['article_type'] == 'groups':
             combined_text = f"{sub['content_text']}{text_info}"
-            if len(combined_text) <= 1024:
-                bot.send_photo(call.message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
-            else:
-                m1 = bot.send_photo(call.message.chat.id, sub['photo_id'])
-                bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
-                if mod_id not in admin_state: admin_state[mod_id] = {}
-                if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
-                admin_state[mod_id]['task_msgs'].append(m1.message_id)
+            m1 = bot.send_photo(call.message.chat.id, sub['photo_id'])
+            bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+            if mod_id not in admin_state: admin_state[mod_id] = {}
+            if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
+            admin_state[mod_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
@@ -1202,11 +1217,11 @@ def process_pub_feedback(message, sub_id, is_writer):
             
         if sub['article_type'] == 'groups':
             combined_text = f"{sub['content_text']}{cap_extra}"
-            if len(combined_text) <= 1024:
-                bot.send_photo(message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
-            else:
-                bot.send_photo(message.chat.id, sub['photo_id'])
-                bot.send_message(message.chat.id, combined_text, reply_markup=markup)
+            m1 = bot.send_photo(message.chat.id, sub['photo_id'])
+            bot.send_message(message.chat.id, combined_text, reply_markup=markup)
+            if mod_id not in admin_state: admin_state[mod_id] = {}
+            if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
+            admin_state[mod_id]['task_msgs'].append(m1.message_id)
         else:
             bot.send_message(message.chat.id, f"{sub['content_text']}{cap_extra}", reply_markup=markup)
     finally:
@@ -1376,7 +1391,7 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
                         qmark = rec['qna_mark'] if rec else 0
                         amark = rec['article_mark'] if rec else 0
                         
-                        text += f"👤{m['fb_name']} \n"
+                        text += f"👤{m['fb_name']}\n"
                         text += f"- Special Task - {tdone}/{ttot}\n"
                         text += f"- QnA Mark - {qmark}\n"
                         text += f"- Article Mark - {amark}\n\n"
