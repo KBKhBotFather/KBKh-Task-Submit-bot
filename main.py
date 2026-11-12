@@ -278,7 +278,7 @@ def trigger_task_now(message):
     finally:
         conn.close()
 
-@bot.message_handler(func=lambda msg: msg.text in ["QnAKEY22", "PublisherKEY22", "ADMINKEY22", "WriterKEY22"])
+@bot.message_handler(func=lambda msg: msg.text in ["QnAKEY22", "PublisherKEY22", "AdminKEY22", "WriterKEY22"])
 def handle_secret_keys(message):
     tg_id = message.from_user.id
     user_state[tg_id] = {'login_flow': message.text}
@@ -327,7 +327,7 @@ def process_door_login(message):
             conn.close()
         user_state.pop(tg_id, None)
         
-    elif key == "ADMINKEY22":
+    elif key == "AdminKEY22":
         bot.send_message(message.chat.id, "Welcome Sir!❤️", reply_markup=secondary_admin_menu())
         user_state.pop(tg_id, None)
         
@@ -2496,7 +2496,7 @@ def handle_general_content(message):
     tg_id = message.from_user.id
     if str(tg_id) == ADMIN_CHAT_ID: return
         
-    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "ADMINKEY22", "WriterKEY22", "KBKh Team", "BKLn Team"]
+    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "AdminKEY22", "WriterKEY22", "KBKh Team", "BKLn Team"]
     if message.content_type == 'text' and message.text in menu_items: return
         
     if tg_id in user_state and user_state[tg_id].get('waiting_btn'):
@@ -2523,7 +2523,7 @@ def handle_general_content(message):
             return
             
         user_state[tg_id]['art_data'] = {'type': 'website_link', 'text': text}
-        msg_text = f"{text}\n\n⚠️আপনি যে লিঙ্ক সাবমিট করেছেন সেটির View Access ঠিক আছে কি না তা নিশ্চিত হয়ে থাকলে \"Submit\" চাপুন।"
+        msg_text = f"{text}\n\n⚠️আপনি যে লিঙ্ক সাবমিট করেছেন সেটির View Access ঠিক আছে কি বায় তা নিশ্চিত হয়ে থাকলে \"Submit\" চাপুন।"
             
         try: bot.delete_message(message.chat.id, user_state[tg_id].get('msg_id'))
         except: pass
