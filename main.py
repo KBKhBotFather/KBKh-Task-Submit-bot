@@ -144,14 +144,14 @@ def member_main_menu():
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, is_persistent=True)
     markup.add(KeyboardButton("Task"))
     markup.add(KeyboardButton("Submit QnA"), KeyboardButton("Submit Article"))
-    markup.add(KeyboardButton("My Task Status"))
+    markup.add(KeyboardButton("Article Status"), KeyboardButton("Task Status"))
     return markup
 
 def primary_admin_menu():
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, is_persistent=True)
     markup.add(KeyboardButton("Task"), KeyboardButton("Task Assign"))
     markup.add(KeyboardButton("Edit Instructions"), KeyboardButton("Triggered Task"))
-    markup.add(KeyboardButton("Reset Task Data"), KeyboardButton("Moderators"))
+    markup.add(KeyboardButton("Reset Data"), KeyboardButton("Moderators"))
     return markup
 
 def qna_marking_menu():
@@ -283,8 +283,8 @@ def trigger_task_now(message):
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        past_time = get_bd_time() - timedelta(minutes=2)
-        cursor.execute("UPDATE kbkh_active_assignments SET scheduled_for = %s WHERE is_started = FALSE", (past_time,))
+        now = get_bd_time()
+        cursor.execute("UPDATE kbkh_active_assignments SET scheduled_for = %s WHERE is_started = FALSE", (now,))
         conn.commit()
         bot.send_message(message.chat.id, "Cheat Code Activated! 🚀\n\nAny pending assigned task will trigger within the next 60 seconds.")
     except Exception as e:
@@ -483,7 +483,7 @@ def handle_task_routing(message):
 # ==========================================
 # 🟢 ADMIN ONLY MENUS
 # ==========================================
-@bot.message_handler(func=lambda msg: msg.text in ["Task Assign", "Triggered Task", "Reset Task Data", "Edit Instructions"])
+@bot.message_handler(func=lambda msg: msg.text in ["Task Assign", "Triggered Task", "Reset Data", "Edit Instructions"])
 def admin_management_buttons(message):
     if str(message.from_user.id) != ADMIN_CHAT_ID: return
         
@@ -560,10 +560,11 @@ def admin_management_buttons(message):
         finally:
             conn.close()
             
-    elif text == "Reset Task Data":
+    elif text == "Reset Data":
         markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(InlineKeyboardButton("Yes", callback_data="reset_task_yes"), InlineKeyboardButton("No", callback_data="cancel_action"))
-        bot.send_message(message.chat.id, "Are you sure you want to reset all Task Data?", reply_markup=markup)
+        markup.row(InlineKeyboardButton("Task Data", callback_data="reset_task_data"), InlineKeyboardButton("Article Data", callback_data="reset_article_data"))
+        markup.add(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        bot.send_message(message.chat.id, "Select what to reset:", reply_markup=markup)
         
     elif text == "Edit Instructions":
         markup = InlineKeyboardMarkup(row_width=2)
@@ -807,6 +808,7 @@ def process_qna_feedback(message, sub_id):
         q_dict = json.loads(sub['q_dict'])
         a_dict = json.loads(sub['a_dict'])
         mark = admin_state[mod_id].get(f'qmark_{sub_id}')
+        
         markup = InlineKeyboardMarkup(row_width=2).row(InlineKeyboardButton("Submit", callback_data=f"qm_sub_{sub_id}"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         a_dict['text'] = a_dict.get('text', '') + f"\n\n✔️Marks Obtained - {mark}\n◀️Feedback: {message.text}"
         send_qna_preview(message.chat.id, q_dict, a_dict, markup)
@@ -1069,7 +1071,7 @@ def fetch_oh_user_article(call):
     finally:
         conn.close()
 
-def get_oh_grading_kb(mod_id, sub_id):
+def get_oh_grading_kb(mod_id, sub_id, hide_fbk=False):
     markup = InlineKeyboardMarkup(row_width=2)
     state = admin_state.get(mod_id, {})
     
@@ -1082,7 +1084,8 @@ def get_oh_grading_kb(mod_id, sub_id):
     pin_text = "Pinned 📌" if is_pinned else "Pin"
     
     markup.row(InlineKeyboardButton(pub_text, callback_data=f"ohact_pub_{sub_id}"), InlineKeyboardButton(rej_text, callback_data=f"ohact_rej_{sub_id}"))
-    markup.row(InlineKeyboardButton("💬Feedback", callback_data=f"ohact_fbk_{sub_id}"))
+    if not hide_fbk:
+        markup.row(InlineKeyboardButton("💬Feedback", callback_data=f"ohact_fbk_{sub_id}"))
     markup.row(InlineKeyboardButton("Submit", callback_data=f"ohact_sub_{sub_id}"), InlineKeyboardButton(pin_text, callback_data=f"ohact_pin_{sub_id}"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
     return markup
 
@@ -1098,13 +1101,19 @@ def oh_actions(call):
     sub_id = int(parts[2])
     
     if act == "pub":
-        admin_state[mod_id]['oh_pub'] = True
-        admin_state[mod_id]['oh_rej'] = False
+        if admin_state[mod_id].get('oh_pub'):
+            admin_state[mod_id]['oh_pub'] = False
+        else:
+            admin_state[mod_id]['oh_pub'] = True
+            admin_state[mod_id]['oh_rej'] = False
         try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_oh_grading_kb(mod_id, sub_id))
         except: pass
     elif act == "rej":
-        admin_state[mod_id]['oh_pub'] = False
-        admin_state[mod_id]['oh_rej'] = True
+        if admin_state[mod_id].get('oh_rej'):
+            admin_state[mod_id]['oh_rej'] = False
+        else:
+            admin_state[mod_id]['oh_pub'] = False
+            admin_state[mod_id]['oh_rej'] = True
         try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_oh_grading_kb(mod_id, sub_id))
         except: pass
     elif act == "pin":
@@ -1117,10 +1126,11 @@ def oh_actions(call):
         try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_oh_grading_kb(mod_id, sub_id))
         except: pass
     elif act == "fbk":
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_oh_grading_kb(mod_id, sub_id, hide_fbk=True))
         except: pass
         msg_box = bot.send_message(call.message.chat.id, "Please write feedback:\nCancel", reply_markup=get_inline_cancel())
         admin_state[mod_id]['prompt_msg_id'] = msg_box.message_id
+        admin_state[mod_id]['oh_target_msg_id'] = call.message.message_id
         bot.register_next_step_handler(msg_box, process_oh_feedback, sub_id)
     elif act == "sub":
         is_pub = admin_state[mod_id].get('oh_pub')
@@ -1144,6 +1154,11 @@ def process_oh_feedback(message, sub_id):
     if prompt:
         try: bot.delete_message(message.chat.id, prompt)
         except: pass
+        
+    old_msg = admin_state[mod_id].get('oh_target_msg_id')
+    if old_msg:
+        try: bot.delete_message(message.chat.id, old_msg)
+        except: pass
     
     conn = get_db_connection()
     try:
@@ -1156,7 +1171,7 @@ def process_oh_feedback(message, sub_id):
         status_text = "Published✅" if is_pub else ("Rejected❌" if is_rej else "")
         
         msg = f"{sub['content_text']}\n\nStatus: {status_text}\n⏪ Feedback: {message.text}"
-        markup = get_oh_grading_kb(mod_id, sub_id)
+        markup = get_oh_grading_kb(mod_id, sub_id, hide_fbk=True)
         bot.send_message(message.chat.id, msg, reply_markup=markup)
     finally:
         conn.close()
@@ -1202,6 +1217,7 @@ def finalize_oh_grading(sub_id, mod_id, chat_id, message_id):
     admin_state[mod_id].pop('oh_pub', None)
     admin_state[mod_id].pop('oh_rej', None)
     admin_state[mod_id].pop('oh_fbk', None)
+    admin_state[mod_id].pop('oh_target_msg_id', None)
     
     if state.get('oh_is_other'): render_oh_other_list(chat_id, mod_id)
     else: render_oh_intern_list(chat_id, mod_id)
@@ -1216,7 +1232,7 @@ def pub_pending_articles(message):
         writer = cursor.fetchone()
         
         if writer and writer['status'] == 'Approved':
-            cursor.execute("SELECT * FROM kbkh_article_submissions WHERE telegram_id = %s AND status = 'Approved' ORDER BY id ASC", (tg_id,))
+            cursor.execute("SELECT * FROM kbkh_article_submissions WHERE telegram_id = %s AND status IN ('Approved', 'Published', 'Rejected_Web') ORDER BY id ASC", (tg_id,))
             approved = cursor.fetchall()
             if not approved:
                 bot.send_message(message.chat.id, "No approved articles found in the waiting list!")
@@ -1224,11 +1240,17 @@ def pub_pending_articles(message):
                 
             markup = InlineKeyboardMarkup(row_width=6)
             btns = []
-            for idx, art in enumerate(approved, 1):
-                btns.append(InlineKeyboardButton(str(idx), callback_data=f"wart_{art['id']}"))
+            valid_idx = 1
+            for art in approved:
+                if art['status'] == 'Approved':
+                    btns.append(InlineKeyboardButton(str(valid_idx), callback_data=f"wart_{art['id']}"))
+                    valid_idx += 1
             markup.add(*btns)
             markup.add(InlineKeyboardButton("Close", callback_data="cancel_action"))
-            bot.send_message(message.chat.id, "Waiting List:", reply_markup=markup)
+            if btns:
+                bot.send_message(message.chat.id, "Waiting List:", reply_markup=markup)
+            else:
+                bot.send_message(message.chat.id, "No pending approved articles found in the waiting list!")
             return
 
         cursor.execute("SELECT is_active FROM kbkh_publisher_moderators WHERE telegram_id = %s", (tg_id,))
@@ -1239,6 +1261,38 @@ def pub_pending_articles(message):
         markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Members", callback_data="pub_other"))
         markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
         bot.send_message(message.chat.id, "Select Category:", reply_markup=markup)
+    finally:
+        conn.close()
+        
+@bot.message_handler(func=lambda msg: msg.text == "Article Status")
+def general_member_article_status(message):
+    tg_id = message.from_user.id
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT fb_name, team_name, status FROM members WHERE telegram_id = %s AND status = 'Approved' AND is_blocked = FALSE AND is_removed = FALSE", (tg_id,))
+        user = cursor.fetchone()
+        if not user: return
+        
+        cursor.execute("SELECT * FROM kbkh_article_submissions WHERE telegram_id = %s AND status IN ('Approved', 'Published', 'Rejected_Web') ORDER BY id ASC", (tg_id,))
+        approved = cursor.fetchall()
+        if not approved:
+            bot.send_message(message.chat.id, "No approved articles found in the waiting list!")
+            return
+            
+        markup = InlineKeyboardMarkup(row_width=6)
+        btns = []
+        valid_idx = 1
+        for art in approved:
+            if art['status'] == 'Approved':
+                btns.append(InlineKeyboardButton(str(valid_idx), callback_data=f"wart_{art['id']}"))
+                valid_idx += 1
+        markup.add(*btns)
+        markup.add(InlineKeyboardButton("Close", callback_data="cancel_action"))
+        if btns:
+            bot.send_message(message.chat.id, "Waiting List:", reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, "No pending approved articles found in the waiting list!")
     finally:
         conn.close()
 
@@ -1264,12 +1318,15 @@ def show_writer_waiting_article(call):
             bot.send_message(call.message.chat.id, f"{art['content_text']}{msg_extra}", reply_markup=markup)
         elif art['article_type'] == 'groups':
             combined_text = f"{art['content_text']}{msg_extra}"
-            m1 = bot.send_photo(call.message.chat.id, art['photo_id'])
-            m2 = bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
-            user_id = call.from_user.id
-            if user_id not in user_state: user_state[user_id] = {}
-            if 'task_msgs' not in user_state[user_id]: user_state[user_id]['task_msgs'] = []
-            user_state[user_id]['task_msgs'].append(m1.message_id)
+            if len(combined_text) <= 1024:
+                bot.send_photo(call.message.chat.id, art['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                m1 = bot.send_photo(call.message.chat.id, art['photo_id'])
+                m2 = bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+                user_id = call.from_user.id
+                if user_id not in user_state: user_state[user_id] = {}
+                if 'task_msgs' not in user_state[user_id]: user_state[user_id]['task_msgs'] = []
+                user_state[user_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
@@ -1376,33 +1433,44 @@ def fetch_pub_user_article(call):
         text_info = f"\n\nName: {sub['name']}"
         if not is_other: text_info += f"\nTeam: {sub['team_name']}"
         
-        markup = get_pub_grading_kb(sub['id'], mark=None, is_approve=False, is_reject=False, is_writer=is_other)
+        if mod_id not in admin_state: admin_state[mod_id] = {}
+        admin_state[mod_id]['pa_pub'] = False
+        admin_state[mod_id]['pa_rej'] = False
+        
+        markup = get_pub_grading_kb(mod_id, sub['id'], mark=None, is_writer=is_other)
         
         if sub['article_type'] in ['website_link', 'website_text', 'text_only']:
             msg_body = f"{sub['content_text']}{text_info}"
             bot.send_message(call.message.chat.id, msg_body, reply_markup=markup)
         elif sub['article_type'] == 'groups':
             combined_text = f"{sub['content_text']}{text_info}"
-            m1 = bot.send_photo(call.message.chat.id, sub['photo_id'])
-            bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
-            if mod_id not in admin_state: admin_state[mod_id] = {}
-            if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
-            admin_state[mod_id]['task_msgs'].append(m1.message_id)
+            if len(combined_text) <= 1024:
+                bot.send_photo(call.message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                m1 = bot.send_photo(call.message.chat.id, sub['photo_id'])
+                m2 = bot.send_message(call.message.chat.id, combined_text, reply_markup=markup)
+                if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
+                admin_state[mod_id]['task_msgs'].append(m1.message_id)
     finally:
         conn.close()
 
-def get_pub_grading_kb(sub_id, mark=None, is_approve=False, is_reject=False, is_writer=False):
+def get_pub_grading_kb(mod_id, sub_id, mark=None, hide_fbk=False, is_writer=False):
     markup = InlineKeyboardMarkup(row_width=6)
     if not is_writer:
         btns = []
         for i in range(1, 7): btns.append(InlineKeyboardButton(f"{i}✅" if str(mark)==str(i) else str(i), callback_data=f"pamk_{sub_id}_{i}"))
         markup.add(*btns)
     
-    app_btn = InlineKeyboardButton("Approve✅" if is_approve else "Approve", callback_data=f"pamk_{sub_id}_app")
-    rej_btn = InlineKeyboardButton("Reject❌" if is_reject else "Reject", callback_data=f"pamk_{sub_id}_rej")
+    state = admin_state.get(mod_id, {})
+    is_pub = state.get('pa_pub', False)
+    is_rej = state.get('pa_rej', False)
+    
+    app_btn = InlineKeyboardButton("Approve✅" if is_pub else "Approve", callback_data=f"pamk_{sub_id}_app")
+    rej_btn = InlineKeyboardButton("Reject❌" if is_rej else "Reject", callback_data=f"pamk_{sub_id}_rej")
     markup.row(app_btn, rej_btn)
     
-    markup.row(InlineKeyboardButton("💬 Feedback", callback_data=f"pamk_{sub_id}_fbk"))
+    if not hide_fbk:
+        markup.row(InlineKeyboardButton("💬 Feedback", callback_data=f"pamk_{sub_id}_fbk"))
     markup.row(InlineKeyboardButton("Submit", callback_data=f"pamk_{sub_id}_sub"), InlineKeyboardButton("Cancel", callback_data="cancel_action"))
     return markup
 
@@ -1418,8 +1486,6 @@ def pub_grading_actions(call):
     action = parts[2]
     
     mark = admin_state[mod_id].get(f'pamk_{sub_id}')
-    is_approve = admin_state[mod_id].get(f'paapp_{sub_id}', False)
-    is_reject = admin_state[mod_id].get(f'parej_{sub_id}', False)
     
     conn = get_db_connection()
     try:
@@ -1433,34 +1499,43 @@ def pub_grading_actions(call):
     
     if action in ["1", "2", "3", "4", "5", "6"]:
         admin_state[mod_id][f'pamk_{sub_id}'] = action
-        admin_state[mod_id][f'parej_{sub_id}'] = False
-        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=action, is_approve=is_approve, is_reject=False, is_writer=is_writer))
+        admin_state[mod_id]['pa_rej'] = False
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(mod_id, sub_id, mark=action, is_writer=is_writer))
         except: pass
         
     elif action == "app":
-        admin_state[mod_id][f'paapp_{sub_id}'] = True
-        admin_state[mod_id][f'parej_{sub_id}'] = False
-        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=mark, is_approve=True, is_reject=False, is_writer=is_writer))
+        if admin_state[mod_id].get('pa_pub'):
+            admin_state[mod_id]['pa_pub'] = False
+        else:
+            admin_state[mod_id]['pa_pub'] = True
+            admin_state[mod_id]['pa_rej'] = False
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(mod_id, sub_id, mark=mark, is_writer=is_writer))
         except: pass
         
     elif action == "rej":
-        admin_state[mod_id][f'pamk_{sub_id}'] = None
-        admin_state[mod_id][f'paapp_{sub_id}'] = False
-        admin_state[mod_id][f'parej_{sub_id}'] = True
-        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(sub_id, mark=None, is_approve=False, is_reject=True, is_writer=is_writer))
+        if admin_state[mod_id].get('pa_rej'):
+            admin_state[mod_id]['pa_rej'] = False
+        else:
+            admin_state[mod_id]['pa_pub'] = False
+            admin_state[mod_id]['pa_rej'] = True
+            admin_state[mod_id][f'pamk_{sub_id}'] = None
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(mod_id, sub_id, mark=None, is_writer=is_writer))
         except: pass
         
     elif action == "fbk":
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_pub_grading_kb(mod_id, sub_id, mark=mark, hide_fbk=True, is_writer=is_writer))
         except: pass
         msg_box = bot.send_message(call.message.chat.id, "Please write feedback:\nCancel", reply_markup=get_inline_cancel())
-        admin_state[mod_id][f'prompt_msg_id_{sub_id}'] = msg_box.message_id
+        admin_state[mod_id]['prompt_msg_id'] = msg_box.message_id
+        admin_state[mod_id]['pa_target_msg_id'] = call.message.message_id
         bot.register_next_step_handler(msg_box, process_pub_feedback, sub_id, is_writer)
         
     elif action == "sub":
-        if not is_reject and not is_approve:
+        is_pub = admin_state[mod_id].get('pa_pub')
+        is_rej = admin_state[mod_id].get('pa_rej')
+        if not is_rej and not is_pub:
             return bot.answer_callback_query(call.id, "Please select Approve or Reject!", show_alert=True)
-        if not is_writer and is_approve and not mark:
+        if not is_writer and is_pub and not mark:
             return bot.answer_callback_query(call.id, "Please select a mark before Approving!", show_alert=True)
             
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -1470,14 +1545,19 @@ def pub_grading_actions(call):
 def process_pub_feedback(message, sub_id, is_writer):
     mod_id = message.from_user.id
     if mod_id not in admin_state: admin_state[mod_id] = {}
-    admin_state[mod_id][f'pafbk_{sub_id}'] = message.text
+    admin_state[mod_id]['pafbk_{sub_id}'] = message.text
     
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
     
-    prompt_msg_id = admin_state[mod_id].get(f'prompt_msg_id_{sub_id}')
+    prompt_msg_id = admin_state[mod_id].get('prompt_msg_id')
     if prompt_msg_id:
         try: bot.delete_message(message.chat.id, prompt_msg_id)
+        except: pass
+        
+    old_msg = admin_state[mod_id].get('pa_target_msg_id')
+    if old_msg:
+        try: bot.delete_message(message.chat.id, old_msg)
         except: pass
     
     conn = get_db_connection()
@@ -1496,12 +1576,12 @@ def process_pub_feedback(message, sub_id, is_writer):
             cap_info = f"\n\nName: {uinfo['name']}\nTeam: {uinfo['team_name']}"
         
         mark = admin_state[mod_id].get(f'pamk_{sub_id}')
-        is_approve = admin_state[mod_id].get(f'paapp_{sub_id}', False)
-        is_reject = admin_state[mod_id].get(f'parej_{sub_id}', False)
+        is_pub = admin_state[mod_id].get('pa_pub', False)
+        is_rej = admin_state[mod_id].get('pa_rej', False)
         
-        markup = get_pub_grading_kb(sub_id, mark=mark, is_approve=is_approve, is_reject=is_reject, is_writer=is_writer)
+        markup = get_pub_grading_kb(mod_id, sub_id, mark=mark, hide_fbk=True, is_writer=is_writer)
         
-        if is_reject:
+        if is_rej:
             cap_extra = f"{cap_info}\nSTATUS: Rejected❌\n⏪Feedback: {message.text}"
         else:
             if is_writer:
@@ -1511,11 +1591,13 @@ def process_pub_feedback(message, sub_id, is_writer):
             
         if sub['article_type'] == 'groups':
             combined_text = f"{sub['content_text']}{cap_extra}"
-            m1 = bot.send_photo(message.chat.id, sub['photo_id'])
-            bot.send_message(message.chat.id, combined_text, reply_markup=markup)
-            if mod_id not in admin_state: admin_state[mod_id] = {}
-            if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
-            admin_state[mod_id]['task_msgs'].append(m1.message_id)
+            if len(combined_text) <= 1024:
+                bot.send_photo(message.chat.id, sub['photo_id'], caption=combined_text, reply_markup=markup)
+            else:
+                m1 = bot.send_photo(message.chat.id, sub['photo_id'])
+                bot.send_message(message.chat.id, combined_text, reply_markup=markup)
+                if 'task_msgs' not in admin_state[mod_id]: admin_state[mod_id]['task_msgs'] = []
+                admin_state[mod_id]['task_msgs'].append(m1.message_id)
         else:
             bot.send_message(message.chat.id, f"{sub['content_text']}{cap_extra}", reply_markup=markup)
     finally:
@@ -1523,7 +1605,7 @@ def process_pub_feedback(message, sub_id, is_writer):
 
 def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
     mark = admin_state[mod_id].get(f'pamk_{sub_id}')
-    is_reject = admin_state[mod_id].get(f'parej_{sub_id}')
+    is_rej = admin_state[mod_id].get('pa_rej')
     feedback = admin_state[mod_id].get(f'pafbk_{sub_id}', '')
     
     conn = get_db_connection()
@@ -1536,27 +1618,27 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         mod_info = cursor.fetchone()
         mod_name = mod_info['mod_name'] if mod_info else "Moderator"
         
-        status_update = "Rejected" if is_reject else "Approved"
+        status_update = "Rejected" if is_rej else "Approved"
         final_mark = int(mark) if mark and not is_writer else 0
         
         cursor.execute("UPDATE kbkh_article_submissions SET status = %s, mark = %s, feedback = %s WHERE id = %s", (status_update, final_mark, feedback, sub_id))
         cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = GREATEST(0, total_assigned - 1) WHERE telegram_id = %s", (mod_id,))
         
         month_name = (sub['created_at'] + timedelta(hours=6)).strftime("%B")
-        if not is_reject and final_mark > 0 and not is_writer:
+        if not is_rej and final_mark > 0 and not is_writer:
             cursor.execute("INSERT INTO kbkh_task_records (telegram_id, month, article_mark) VALUES (%s, %s, %s) ON CONFLICT (telegram_id, month) DO UPDATE SET article_mark = kbkh_task_records.article_mark + %s", (sub['telegram_id'], month_name, final_mark, final_mark))
         conn.commit()
         
         # Notify User
         base_body = sub['content_text']
         if sub['article_type'] in ['website_link', 'website_text', 'text_only']:
-            if is_reject:
+            if is_rej:
                 msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by Publisher: {mod_name}"
             else:
                 msg_to_user = f"{base_body}\n\nCongratulations❤️\nYour article has been REVIEWED and will be PUBLISHED SOON!"
                 if not is_writer and final_mark > 0: msg_to_user += f"\n\n🔖Obtained Marks - {mark}️⃣"
         else: # groups
-            if is_reject:
+            if is_rej:
                 msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by Publisher: {mod_name}"
             else:
                 msg_to_user = f"{base_body}\n\nArticle Review Completed! Your Results Are Ready.✅"
@@ -1579,12 +1661,18 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
     finally:
         conn.close()
         
+    for m_id in admin_state.get(mod_id, {}).get('task_msgs', []):
+        try: bot.delete_message(chat_id, m_id)
+        except: pass
+        
     if mod_id in admin_state:
         admin_state[mod_id].pop(f'pamk_{sub_id}', None)
-        admin_state[mod_id].pop(f'paapp_{sub_id}', None)
-        admin_state[mod_id].pop(f'parej_{sub_id}', None)
+        admin_state[mod_id].pop('pa_pub', None)
+        admin_state[mod_id].pop('pa_rej', None)
         admin_state[mod_id].pop(f'pafbk_{sub_id}', None)
-        admin_state[mod_id].pop(f'prompt_msg_id_{sub_id}', None)
+        admin_state[mod_id].pop('prompt_msg_id', None)
+        admin_state[mod_id].pop('pa_target_msg_id', None)
+        admin_state[mod_id].pop('task_msgs', None)
         
     if is_writer: render_pub_other_list(chat_id, mod_id)
     else: render_pub_intern_list(chat_id, mod_id)
@@ -1601,10 +1689,10 @@ def get_months_kb(prefix):
     markup.add(InlineKeyboardButton("Close", callback_data="cancel_action"))
     return markup
 
-@bot.message_handler(func=lambda msg: msg.text in ["My Task Status", "Members Status", "KBKh Team"])
+@bot.message_handler(func=lambda msg: msg.text in ["Task Status", "Members Status", "KBKh Team"])
 def status_selectors(message):
     tg_id = message.from_user.id
-    if message.text == "My Task Status":
+    if message.text == "Task Status":
         bot.send_message(message.chat.id, "🗓️Please Select Month:", reply_markup=get_months_kb("myts"))
     else:
         bot.send_message(message.chat.id, "🗓️Please Select Month:", reply_markup=get_months_kb("modst"))
@@ -1701,6 +1789,19 @@ def render_members_status_list(chat_id, message_id, mod_id, month):
 # ==========================================
 # 👑 MAIN ADMIN: MODERATORS PANEL
 # ==========================================
+@bot.callback_query_handler(func=lambda call: call.data in ["reset_task_data", "reset_article_data"])
+def handle_reset_type(call):
+    adm_id = call.from_user.id
+    try: bot.answer_callback_query(call.id)
+    except: pass
+    
+    admin_state[adm_id] = {'reset_type': call.data}
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("Yes", callback_data="reset_task_yes"), InlineKeyboardButton("No", callback_data="cancel_action"))
+    msg_text = "Are you sure you want to reset all Task Data?" if call.data == "reset_task_data" else "Are you sure you want to reset all Article Data?"
+    try: bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+    except: pass
+
 def render_main_admin_mods(chat_id, adm_id, message_id):
     conn = get_db_connection()
     try:
@@ -2057,23 +2158,28 @@ def central_admin_actions(call):
 
     # 3. Reset Data Action
     if data == "reset_task_yes":
+        reset_type = admin_state.get(adm_id, {}).get('reset_type')
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM kbkh_user_task_status;")
-            cursor.execute("DELETE FROM kbkh_active_assignments;")
-            cursor.execute("DELETE FROM kbkh_submissions;")
-            cursor.execute("DELETE FROM kbkh_question_bank;")
-            cursor.execute("DELETE FROM kbkh_qna_submissions;")
-            cursor.execute("DELETE FROM kbkh_task_records;")
-            cursor.execute("UPDATE kbkh_qna_moderators SET total_assigned = 0;")
-            cursor.execute("DELETE FROM kbkh_article_submissions;")
-            cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = 0;")
+            if reset_type == "reset_task_data":
+                cursor.execute("DELETE FROM kbkh_user_task_status;")
+                cursor.execute("DELETE FROM kbkh_active_assignments;")
+                cursor.execute("DELETE FROM kbkh_submissions;")
+                cursor.execute("DELETE FROM kbkh_question_bank;")
+                cursor.execute("DELETE FROM kbkh_qna_submissions;")
+                cursor.execute("DELETE FROM kbkh_task_records;")
+                cursor.execute("UPDATE kbkh_qna_moderators SET total_assigned = 0;")
+                msg = "All Member Task Data has been permanently reset!✅"
+            elif reset_type == "reset_article_data":
+                cursor.execute("DELETE FROM kbkh_article_submissions;")
+                cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = 0;")
+                msg = "All Member Article Data has been permanently reset!✅"
             conn.commit()
             
             try: bot.delete_message(call.message.chat.id, call.message.message_id)
             except: pass
-            bot.send_message(call.message.chat.id, "All Member Data has been permanently reset!✅")
+            bot.send_message(call.message.chat.id, msg)
         finally:
             conn.close()
         return
@@ -2816,7 +2922,7 @@ def handle_general_content(message):
     tg_id = message.from_user.id
     if str(tg_id) == ADMIN_CHAT_ID: return
         
-    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "My Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "AdminKEY22", "WriterKEY22", "KBKh Team", "BKLn Team"]
+    menu_items = ["Task", "Submit QnA", "Submit Article", "On Hold", "Article Status", "Task Status", "Pending QnA", "Members Status", "Resign⚠️", "Pending Articles", "Pending Article", "QnAKEY22", "PublisherKEY22", "AdminKEY22", "WriterKEY22", "KBKh Team", "BKLn Team"]
     if message.content_type == 'text' and message.text in menu_items: return
         
     if tg_id in user_state and user_state[tg_id].get('waiting_btn'):
