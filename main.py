@@ -115,6 +115,18 @@ def init_db():
         
         try: cursor.execute("ALTER TABLE kbkh_task_records ADD COLUMN article_mark INT DEFAULT 0;")
         except Exception: pass 
+        try: cursor.execute("ALTER TABLE kbkh_article_submissions ADD COLUMN IF NOT EXISTS is_orphan BOOLEAN DEFAULT FALSE;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_article_submissions ADD COLUMN IF NOT EXISTS orphan_name TEXT;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_qna_moderators ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_publisher_moderators ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_writers ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_admin_moderators ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;")
+        except Exception: pass
             
         default_inst = {
             1: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!", 
@@ -1569,7 +1581,7 @@ def pub_grading_actions(call):
 def process_pub_feedback(message, sub_id, is_writer):
     mod_id = message.from_user.id
     if mod_id not in admin_state: admin_state[mod_id] = {}
-    admin_state[mod_id]['pafbk_{sub_id}'] = message.text
+    admin_state[mod_id][f'pafbk_{sub_id}'] = message.text
     
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
@@ -2768,6 +2780,9 @@ def central_admin_actions(call):
             for t in teams:
                 cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s", (t['team_name'],))
                 for u in cursor.fetchall(): auto_end_users.append(u['telegram_id'])
+                cursor.execute("SELECT telegram_id FROM kbkh_qna_moderators WHERE team_name = %s AND is_active = TRUE AND is_blocked = FALSE", (t['team_name'],))
+                for u in cursor.fetchall(): auto_end_users.append(u['telegram_id'])
+            auto_end_users = list(set(auto_end_users))
             cursor.execute("DELETE FROM kbkh_active_assignments WHERE is_started = TRUE")
             conn.commit()
         finally:
@@ -3588,6 +3603,9 @@ def auto_task_timer():
                         if task_msgs and task_msgs['msg_1']:
                             cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (team,))
                             users = [u['telegram_id'] for u in cursor.fetchall()]
+                            cursor.execute("SELECT telegram_id FROM kbkh_qna_moderators WHERE team_name = %s AND is_active = TRUE AND is_blocked = FALSE", (team,))
+                            qna_mods = [u['telegram_id'] for u in cursor.fetchall()]
+                            users = list(set(users + qna_mods))
                             actions_to_take.append({'users': users, 'msg': task_msgs['msg_1']})
                         all_teams_finished = False
                         continue
@@ -3632,6 +3650,8 @@ def auto_task_timer():
                     users_to_notify = []
                     for assign in assignments:
                         cursor.execute("SELECT telegram_id FROM members WHERE team_name = %s AND status = 'Approved'", (assign['team_name'],))
+                        users_to_notify.extend([u['telegram_id'] for u in cursor.fetchall()])
+                        cursor.execute("SELECT telegram_id FROM kbkh_qna_moderators WHERE team_name = %s AND is_active = TRUE AND is_blocked = FALSE", (assign['team_name'],))
                         users_to_notify.extend([u['telegram_id'] for u in cursor.fetchall()])
                     actions_to_take.append({'users': list(set(users_to_notify)), 'msg': "Task END!\nThank you dear member♥️"})
                     cursor.execute("DELETE FROM kbkh_active_assignments")
