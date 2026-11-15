@@ -127,6 +127,12 @@ def init_db():
         except Exception: pass
         try: cursor.execute("ALTER TABLE kbkh_admin_moderators ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;")
         except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_article_submissions ADD COLUMN IF NOT EXISTS author_name TEXT;")
+        except Exception: pass
+        try: cursor.execute("ALTER TABLE kbkh_article_submissions ADD COLUMN IF NOT EXISTS author_team TEXT;")
+        except Exception: pass
+        try: cursor.execute("UPDATE kbkh_article_submissions s SET author_name = m.fb_name, author_team = m.team_name FROM members m WHERE s.telegram_id = m.telegram_id AND (s.author_name IS NULL OR s.author_team IS NULL);")
+        except Exception: pass
             
         default_inst = {
             1: "উত্তরের মান অনেক বেশি উন্নত করা প্রয়োজন!", 
@@ -197,12 +203,18 @@ def get_inline_cancel():
 # ==========================================
 # 🛠️ HELPER FUNCTIONS
 # ==========================================
-def check_member_registration(tg_id):
+def check_member_registration(tg_id, notify_unregistered=True):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT fb_name, team_name, status FROM members WHERE telegram_id = %s AND status = 'Approved' AND is_blocked = FALSE AND is_removed = FALSE", (tg_id,))
-        return cursor.fetchone()
+        user = cursor.fetchone()
+        if not user and notify_unregistered:
+            cursor.execute("SELECT 1 FROM kbkh_writers WHERE telegram_id = %s UNION SELECT 1 FROM kbkh_qna_moderators WHERE telegram_id = %s AND is_active = TRUE UNION SELECT 1 FROM kbkh_publisher_moderators WHERE telegram_id = %s AND is_active = TRUE UNION SELECT 1 FROM kbkh_admin_moderators WHERE telegram_id = %s AND is_active = TRUE", (tg_id, tg_id, tg_id, tg_id))
+            if not cursor.fetchone() and str(tg_id) != ADMIN_CHAT_ID:
+                try: bot.send_message(tg_id, "You are not REGISTERED❌", reply_markup=ReplyKeyboardRemove())
+                except: pass
+        return user
     finally:
         conn.close()
 
@@ -935,7 +947,12 @@ def process_article_submit(call):
         content = state['art_data'].get('text', '')
         photo_id = state['art_data'].get('photo', '')
         
-        cursor.execute("INSERT INTO kbkh_article_submissions (telegram_id, article_type, content_text, photo_id, assigned_grader) VALUES (%s, %s, %s, %s, %s)", (tg_id, art_type, content, photo_id, mod_id))
+        cursor.execute("SELECT fb_name, team_name FROM members WHERE telegram_id = %s", (tg_id,))
+        m_row = cursor.fetchone()
+        a_name = m_row[0] if m_row else None
+        a_team = m_row[1] if m_row else None
+        
+        cursor.execute("INSERT INTO kbkh_article_submissions (telegram_id, article_type, content_text, photo_id, assigned_grader, author_name, author_team) VALUES (%s, %s, %s, %s, %s, %s, %s)", (tg_id, art_type, content, photo_id, mod_id, a_name, a_team))
         if mod_id: cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = total_assigned + 1 WHERE telegram_id = %s", (mod_id,))
         conn.commit()
         bot.send_message(call.message.chat.id, "Your article has been successfully SUBMITTED✅ \nPlease wait for the final confirmation!")
@@ -969,21 +986,18 @@ def render_oh_intern_list(chat_id, mod_id, message_id=None):
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            SELECT s.telegram_id, m.fb_name, m.team_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s JOIN members m ON s.telegram_id = m.telegram_id 
-            WHERE s.status = 'Approved' AND s.article_type = 'website_link' AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
-            GROUP BY s.telegram_id, m.fb_name, m.team_name
+            SELECT s.telegram_id, 
+                   COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
+                   COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
+                   COUNT(s.id) as total 
+            FROM kbkh_article_submissions s 
+            LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+            WHERE s.status = 'Approved' AND s.article_type = 'website_link' 
+              AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
+            GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
         """)
         records = cursor.fetchall()
-        
-        cursor.execute("""
-            SELECT s.telegram_id, s.orphan_name as fb_name, 'Orphan' as team_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s 
-            WHERE s.status = 'Approved' AND s.article_type = 'website_link' AND s.is_orphan = TRUE
-            GROUP BY s.telegram_id, s.orphan_name
-        """)
-        orphan_records = cursor.fetchall()
-        records.extend(orphan_records)
         
         teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': [], 'Orphan': []}
         for r in records:
@@ -1371,10 +1385,15 @@ def render_pub_intern_list(chat_id, mod_id, message_id=None):
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            SELECT s.telegram_id, m.fb_name, m.team_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s JOIN members m ON s.telegram_id = m.telegram_id 
+            SELECT s.telegram_id, 
+                   COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
+                   COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
+                   COUNT(s.id) as total 
+            FROM kbkh_article_submissions s 
+            LEFT JOIN members m ON s.telegram_id = m.telegram_id 
             WHERE s.assigned_grader = %s AND s.status = 'Pending' 
-            GROUP BY s.telegram_id, m.fb_name, m.team_name
+              AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
+            GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
         """, (mod_id,))
         records = cursor.fetchall()
         
@@ -1456,7 +1475,15 @@ def fetch_pub_user_article(call):
         if is_other:
             cursor.execute("SELECT s.*, w.short_name as name FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' ORDER BY s.id ASC LIMIT 1", (mod_id, target_user))
         else:
-            cursor.execute("SELECT s.*, m.fb_name as name, m.team_name FROM kbkh_article_submissions s JOIN members m ON s.telegram_id = m.telegram_id WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' ORDER BY s.id ASC LIMIT 1", (mod_id, target_user))
+            cursor.execute("""
+                SELECT s.*, 
+                       COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as name, 
+                       COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name 
+                FROM kbkh_article_submissions s 
+                LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+                WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' 
+                ORDER BY s.id ASC LIMIT 1
+            """, (mod_id, target_user))
         sub = cursor.fetchone()
         
         if not sub:
@@ -1609,7 +1636,9 @@ def process_pub_feedback(message, sub_id, is_writer):
         else:
             cursor.execute("SELECT fb_name as name, team_name FROM members WHERE telegram_id = %s", (sub['telegram_id'],))
             uinfo = cursor.fetchone()
-            cap_info = f"\n\nName: {uinfo['name']}\nTeam: {uinfo['team_name']}"
+            u_name = uinfo['name'] if uinfo else (sub.get('author_name') or sub.get('orphan_name') or 'Roky')
+            u_team = uinfo['team_name'] if uinfo else (sub.get('author_team') or 'Team Beta')
+            cap_info = f"\n\nName: {u_name}\nTeam: {u_team}"
         
         mark = admin_state[mod_id].get(f'pamk_{sub_id}')
         is_pub = admin_state[mod_id].get('pa_pub', False)
@@ -1721,21 +1750,18 @@ def render_apa_intern_list(chat_id, adm_id, message_id=None):
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            SELECT s.telegram_id, m.fb_name, m.team_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s JOIN members m ON s.telegram_id = m.telegram_id 
-            WHERE s.status = 'Approved' AND s.article_type = 'groups' AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
-            GROUP BY s.telegram_id, m.fb_name, m.team_name
+            SELECT s.telegram_id, 
+                   COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
+                   COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
+                   COUNT(s.id) as total 
+            FROM kbkh_article_submissions s 
+            LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+            WHERE s.status = 'Approved' AND s.article_type = 'groups' 
+              AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
+            GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
         """)
         records = cursor.fetchall()
-        
-        cursor.execute("""
-            SELECT s.telegram_id, s.orphan_name as fb_name, 'Orphan' as team_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s 
-            WHERE s.status = 'Approved' AND s.article_type = 'groups' AND s.is_orphan = TRUE
-            GROUP BY s.telegram_id, s.orphan_name
-        """)
-        orphan_records = cursor.fetchall()
-        records.extend(orphan_records)
         
         teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': [], 'Orphan': []}
         for r in records:
@@ -1769,7 +1795,7 @@ def render_apa_other_list(chat_id, adm_id, message_id=None):
         cursor.execute("""
             SELECT s.telegram_id, w.short_name, COUNT(s.id) as total 
             FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id 
-            WHERE s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only') AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
+            WHERE s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only', 'groups') AND (s.is_orphan = FALSE OR s.is_orphan IS NULL)
             GROUP BY s.telegram_id, w.short_name
         """)
         records = cursor.fetchall()
@@ -1777,7 +1803,7 @@ def render_apa_other_list(chat_id, adm_id, message_id=None):
         cursor.execute("""
             SELECT s.telegram_id, s.orphan_name as short_name, COUNT(s.id) as total 
             FROM kbkh_article_submissions s 
-            WHERE s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only') AND s.is_orphan = TRUE
+            WHERE s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only', 'groups') AND s.is_orphan = TRUE
             GROUP BY s.telegram_id, s.orphan_name
         """)
         orphan_records = cursor.fetchall()
@@ -1830,7 +1856,7 @@ def fetch_apa_user_article(call):
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         if is_other:
-            cursor.execute("SELECT s.* FROM kbkh_article_submissions s WHERE s.telegram_id = %s AND s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only') ORDER BY s.id ASC LIMIT 1", (target_user,))
+            cursor.execute("SELECT s.* FROM kbkh_article_submissions s WHERE s.telegram_id = %s AND s.status = 'Approved' AND s.article_type IN ('website_text', 'text_only', 'groups') ORDER BY s.id ASC LIMIT 1", (target_user,))
         else:
             cursor.execute("SELECT s.* FROM kbkh_article_submissions s WHERE s.telegram_id = %s AND s.status = 'Approved' AND s.article_type = 'groups' ORDER BY s.id ASC LIMIT 1", (target_user,))
         sub = cursor.fetchone()
