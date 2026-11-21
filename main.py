@@ -1723,10 +1723,6 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
             mod_name = "Rakibul Hasan Roky"
             role_label = "Admin"
         else:
-            if str(mod_id) == ADMIN_CHAT_ID:
-            mod_name = "Rakibul Hasan Roky"
-            role_label = "Admin"
-        else:
             cursor.execute("SELECT mod_name FROM kbkh_publisher_moderators WHERE telegram_id = %s", (mod_id,))
             mod_info = cursor.fetchone()
             mod_name = mod_info['mod_name'] if mod_info else "Moderator"
@@ -1734,7 +1730,7 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         
         status_update = "Rejected" if is_rej else "Approved"
         final_mark = int(mark) if mark and not is_writer else 0
-        
+
         cursor.execute("UPDATE kbkh_article_submissions SET status = %s, mark = %s, feedback = %s WHERE id = %s", (status_update, final_mark, feedback, sub_id))
         if sub.get('assigned_grader'):
             cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = GREATEST(0, total_assigned - 1) WHERE telegram_id = %s", (sub['assigned_grader'],))
@@ -1742,8 +1738,8 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         month_name = (sub['created_at'] + timedelta(hours=6)).strftime("%B")
         if not is_rej and final_mark > 0 and not is_writer:
             cursor.execute("INSERT INTO kbkh_task_records (telegram_id, month, article_mark) VALUES (%s, %s, %s) ON CONFLICT (telegram_id, month) DO UPDATE SET article_mark = kbkh_task_records.article_mark + %s", (sub['telegram_id'], month_name, final_mark, final_mark))
-        conn.commit()
-        
+        conn.commit() 
+
         # Notify User
         base_body = sub['content_text']
         if sub['article_type'] in ['website_link', 'website_text', 'text_only']:
@@ -2433,7 +2429,8 @@ def central_admin_actions(call):
         
     elif data.startswith("wreg_"):
         act = data.split("_")[1]
-        admin_state[adm_id]['writer_target'] = None
+        if act != "sub":
+            admin_state[adm_id]['writer_target'] = None
         if act == "pend": render_writer_pending_list(call.message.chat.id, adm_id, call.message.message_id)
         elif act == "mem": render_writer_members_list(call.message.chat.id, adm_id, call.message.message_id)
         elif act == "sub":
@@ -2561,7 +2558,7 @@ def central_admin_actions(call):
                             cursor.execute("UPDATE kbkh_qna_submissions SET assigned_grader = %s WHERE id = %s", (new_mod, p['id']))
                             if new_mod: cursor.execute("UPDATE kbkh_qna_moderators SET total_assigned = total_assigned + 1 WHERE telegram_id = %s", (new_mod,))
                     else:
-                        cursor.execute("SELECT id FROM kbkh_article_submissions WHERE assigned_grader = %s AND status = 'Pending'", (target['id'],))
+                        cursor.execute("SELECT id FROM kbkh_article_submissions WHERE assigned_grader = %s AND status = 'Pending' AND article_type = 'website_link'", (target['id'],))
                         for p in cursor.fetchall():
                             new_mod = get_least_loaded_pub_mod()
                             cursor.execute("UPDATE kbkh_article_submissions SET assigned_grader = %s WHERE id = %s", (new_mod, p['id']))
