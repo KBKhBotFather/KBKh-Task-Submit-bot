@@ -170,7 +170,7 @@ def primary_admin_menu():
     markup.add(KeyboardButton("Task"), KeyboardButton("Task Assign"))
     markup.add(KeyboardButton("Edit Instructions"), KeyboardButton("Triggered Task"))
     markup.add(KeyboardButton("Reset Data"), KeyboardButton("Moderators"))
-    markup.add(KeyboardButton("Pending Articles"))
+    markup.add(KeyboardButton("Pending Articles"), KeyboardButton("On Hold"))
     return markup
 
 def qna_marking_menu():
@@ -696,7 +696,7 @@ def confirm_qna_resign(call):
         
         if is_active_pub:
             cursor.execute("UPDATE kbkh_publisher_moderators SET is_active = FALSE, resign_count = resign_count + 1 WHERE telegram_id = %s", (tg_id,))
-            cursor.execute("SELECT id FROM kbkh_article_submissions WHERE assigned_grader = %s AND status = 'Pending'", (tg_id,))
+            cursor.execute("SELECT id FROM kbkh_article_submissions WHERE assigned_grader = %s AND status = 'Pending' AND article_type = 'website_link'", (tg_id,))
             for p in cursor.fetchall():
                 new_mod = get_least_loaded_pub_mod()
                 cursor.execute("UPDATE kbkh_article_submissions SET assigned_grader = %s WHERE id = %s", (new_mod, p['id']))
@@ -941,9 +941,8 @@ def process_article_submit(call):
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        mod_id = get_least_loaded_pub_mod()
-        
         art_type = state['art_data']['type']
+        mod_id = get_least_loaded_pub_mod() if art_type == 'website_link' else None
         content = state['art_data'].get('text', '')
         photo_id = state['art_data'].get('photo', '')
         
@@ -967,6 +966,12 @@ def on_hold_coming_soon_bkln(message):
 @bot.message_handler(func=lambda msg: msg.text == "On Hold")
 def on_hold_start(message):
     tg_id = message.from_user.id
+    if str(tg_id) == ADMIN_CHAT_ID:
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.row(InlineKeyboardButton("Intern Members", callback_data="apa_intern"), InlineKeyboardButton("Other Members", callback_data="apa_other"))
+        markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
+        bot.send_message(message.chat.id, "Select Category:", reply_markup=markup)
+        return
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -1298,7 +1303,7 @@ def pub_pending_articles(message):
         # Admin Pending Articles
         if str(tg_id) == ADMIN_CHAT_ID:
             markup = InlineKeyboardMarkup(row_width=2)
-            markup.row(InlineKeyboardButton("Intern Members", callback_data="apa_intern"), InlineKeyboardButton("Other Members", callback_data="apa_other"))
+            markup.row(InlineKeyboardButton("Intern Members", callback_data="pub_intern"), InlineKeyboardButton("Other Members", callback_data="pub_other"))
             markup.row(InlineKeyboardButton("Cancel", callback_data="cancel_action"))
             bot.send_message(message.chat.id, "Select Category:", reply_markup=markup)
             return
@@ -1384,17 +1389,30 @@ def render_pub_intern_list(chat_id, mod_id, message_id=None):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("""
-            SELECT s.telegram_id, 
-                   COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
-                   COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
-                   COUNT(s.id) as total 
-            FROM kbkh_article_submissions s 
-            LEFT JOIN members m ON s.telegram_id = m.telegram_id 
-            WHERE s.assigned_grader = %s AND s.status = 'Pending' 
-              AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
-            GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
-        """, (mod_id,))
+        if str(mod_id) == ADMIN_CHAT_ID:
+            cursor.execute("""
+                SELECT s.telegram_id, 
+                       COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
+                       COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
+                       COUNT(s.id) as total 
+                FROM kbkh_article_submissions s 
+                LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+                WHERE s.status = 'Pending' AND s.article_type = 'groups'
+                  AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
+                GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
+            """)
+        else:
+            cursor.execute("""
+                SELECT s.telegram_id, 
+                       COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as fb_name, 
+                       COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name, 
+                       COUNT(s.id) as total 
+                FROM kbkh_article_submissions s 
+                LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+                WHERE s.assigned_grader = %s AND s.status = 'Pending' AND s.article_type = 'website_link'
+                  AND NOT EXISTS (SELECT 1 FROM kbkh_writers w WHERE w.telegram_id = s.telegram_id)
+                GROUP BY s.telegram_id, COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky'), COALESCE(m.team_name, s.author_team, 'Team Beta')
+            """, (mod_id,))
         records = cursor.fetchall()
         
         teams = {'Team Alpha': [], 'Team Beta': [], 'Team Gamma': []}
@@ -1421,12 +1439,20 @@ def render_pub_other_list(chat_id, mod_id, message_id=None):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("""
-            SELECT s.telegram_id, w.short_name, COUNT(s.id) as total 
-            FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id 
-            WHERE s.assigned_grader = %s AND s.status = 'Pending' 
-            GROUP BY s.telegram_id, w.short_name
-        """, (mod_id,))
+        if str(mod_id) == ADMIN_CHAT_ID:
+            cursor.execute("""
+                SELECT s.telegram_id, w.short_name, COUNT(s.id) as total 
+                FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id 
+                WHERE s.status = 'Pending' AND s.article_type IN ('groups', 'text_only', 'website_text')
+                GROUP BY s.telegram_id, w.short_name
+            """)
+        else:
+            cursor.execute("""
+                SELECT s.telegram_id, w.short_name, COUNT(s.id) as total 
+                FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id 
+                WHERE s.assigned_grader = %s AND s.status = 'Pending' AND s.article_type = 'website_link'
+                GROUP BY s.telegram_id, w.short_name
+            """, (mod_id,))
         records = cursor.fetchall()
         
         markup = InlineKeyboardMarkup(row_width=1)
@@ -1472,18 +1498,32 @@ def fetch_pub_user_article(call):
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        if is_other:
-            cursor.execute("SELECT s.*, w.short_name as name FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' ORDER BY s.id ASC LIMIT 1", (mod_id, target_user))
+        if str(mod_id) == ADMIN_CHAT_ID:
+            if is_other:
+                cursor.execute("SELECT s.*, w.short_name as name FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id WHERE s.telegram_id = %s AND s.status = 'Pending' AND s.article_type IN ('groups', 'text_only', 'website_text') ORDER BY s.id ASC LIMIT 1", (target_user,))
+            else:
+                cursor.execute("""
+                    SELECT s.*, 
+                           COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as name, 
+                           COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name 
+                    FROM kbkh_article_submissions s 
+                    LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+                    WHERE s.telegram_id = %s AND s.status = 'Pending' AND s.article_type = 'groups'
+                    ORDER BY s.id ASC LIMIT 1
+                """, (target_user,))
         else:
-            cursor.execute("""
-                SELECT s.*, 
-                       COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as name, 
-                       COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name 
-                FROM kbkh_article_submissions s 
-                LEFT JOIN members m ON s.telegram_id = m.telegram_id 
-                WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' 
-                ORDER BY s.id ASC LIMIT 1
-            """, (mod_id, target_user))
+            if is_other:
+                cursor.execute("SELECT s.*, w.short_name as name FROM kbkh_article_submissions s JOIN kbkh_writers w ON s.telegram_id = w.telegram_id WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' AND s.article_type = 'website_link' ORDER BY s.id ASC LIMIT 1", (mod_id, target_user))
+            else:
+                cursor.execute("""
+                    SELECT s.*, 
+                           COALESCE(m.fb_name, s.author_name, s.orphan_name, 'Roky') as name, 
+                           COALESCE(m.team_name, s.author_team, 'Team Beta') as team_name 
+                    FROM kbkh_article_submissions s 
+                    LEFT JOIN members m ON s.telegram_id = m.telegram_id 
+                    WHERE s.assigned_grader = %s AND s.telegram_id = %s AND s.status = 'Pending' AND s.article_type = 'website_link'
+                    ORDER BY s.id ASC LIMIT 1
+                """, (mod_id, target_user))
         sub = cursor.fetchone()
         
         if not sub:
@@ -1679,15 +1719,25 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         cursor.execute("SELECT * FROM kbkh_article_submissions WHERE id = %s", (sub_id,))
         sub = cursor.fetchone()
         
-        cursor.execute("SELECT mod_name FROM kbkh_publisher_moderators WHERE telegram_id = %s", (mod_id,))
-        mod_info = cursor.fetchone()
-        mod_name = mod_info['mod_name'] if mod_info else "Moderator"
+        if str(mod_id) == ADMIN_CHAT_ID:
+            mod_name = "Rakibul Hasan Roky"
+            role_label = "Admin"
+        else:
+            if str(mod_id) == ADMIN_CHAT_ID:
+            mod_name = "Rakibul Hasan Roky"
+            role_label = "Admin"
+        else:
+            cursor.execute("SELECT mod_name FROM kbkh_publisher_moderators WHERE telegram_id = %s", (mod_id,))
+            mod_info = cursor.fetchone()
+            mod_name = mod_info['mod_name'] if mod_info else "Moderator"
+            role_label = "Publisher"
         
         status_update = "Rejected" if is_rej else "Approved"
         final_mark = int(mark) if mark and not is_writer else 0
         
         cursor.execute("UPDATE kbkh_article_submissions SET status = %s, mark = %s, feedback = %s WHERE id = %s", (status_update, final_mark, feedback, sub_id))
-        cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = GREATEST(0, total_assigned - 1) WHERE telegram_id = %s", (mod_id,))
+        if sub.get('assigned_grader'):
+            cursor.execute("UPDATE kbkh_publisher_moderators SET total_assigned = GREATEST(0, total_assigned - 1) WHERE telegram_id = %s", (sub['assigned_grader'],))
         
         month_name = (sub['created_at'] + timedelta(hours=6)).strftime("%B")
         if not is_rej and final_mark > 0 and not is_writer:
@@ -1698,13 +1748,13 @@ def finalize_pub_grading(sub_id, mod_id, chat_id, is_writer):
         base_body = sub['content_text']
         if sub['article_type'] in ['website_link', 'website_text', 'text_only']:
             if is_rej:
-                msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by Publisher: {mod_name}"
+                msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by {role_label}: {mod_name}"
             else:
                 msg_to_user = f"{base_body}\n\nCongratulations❤️\nYour article has been REVIEWED and will be PUBLISHED SOON!"
                 if not is_writer and final_mark > 0: msg_to_user += f"\n\n🔖Obtained Marks - {mark}️⃣"
         else: # groups
             if is_rej:
-                msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by Publisher: {mod_name}"
+                msg_to_user = f"{base_body}\n\nSorry, your article has been REJECTED❌\nRejected by {role_label}: {mod_name}"
             else:
                 msg_to_user = f"{base_body}\n\nArticle Review Completed! Your Results Are Ready.✅"
                 if not is_writer and final_mark > 0: msg_to_user += f"\n\n🔖Obtained Marks - {mark}️⃣"
